@@ -1,0 +1,29 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment (if you use one)
+.venv/
+venv/
+
+# VSCode settings
+.vscode/
+
+# Environment variables (secrets)
+.env
+.env.local
+.env.*
+
+# Allow template
+!.env.example
+
+# Hugging Face dataset cache (prevents GB files being committed)
+.cache/
+huggingface/
+**/datasets/
+
+# Jupyter notebook checkpoints (if you later add .ipynb)
+.ipynb_checkpoints/
+
+# macOS junk
+.DS_Store
