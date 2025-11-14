@@ -3,11 +3,13 @@ import sys
 import argparse
 from typing import Callable, Iterable, List, Tuple
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import numpy as np
 from datasets import load_dataset
 from ratelimit import limits, sleep_and_retry
 from openai import AzureOpenAI
-
 
 def get_env(name: str, default: str = "") -> str:
     value = os.getenv(name, default)
@@ -53,8 +55,6 @@ def build_llm_method_api(client: AzureOpenAI, deployment: str) -> Callable[[str]
             max_completion_tokens=16384,
         )
         msg = response.choices[0].message
-        print("promt: ", prompt)
-        print("msg: ", msg)
         content = (msg.content or "").strip()
 
         if not content:

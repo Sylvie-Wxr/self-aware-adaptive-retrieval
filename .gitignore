@@ -5,6 +5,9 @@ __pycache__/
 # Virtual environment (if you use one)
 .venv/
 venv/
+uv.lock
+.python-version
+
 
 # VSCode settings
 .vscode/
