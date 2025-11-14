@@ -21,9 +21,14 @@ def get_env(name: str, default: str = "") -> str:
 
 def build_llm_method_local(llm: LLM, sampling_params: SamplingParams) -> Callable[[str], str]:
     def predict(question: str) -> str:
-        prompt = f"Answer ONLY one of: yes, no, maybe. No explanations. You are a medical professional. {question}"
+        prompt = (
+            "You must answer strictly with one label: yes, no, or maybe.\n"
+            "No explanations. Only output the label.\n"
+            f"Question: {question}\n"
+            "Answer:"
+        )
         output = llm.generate([prompt], sampling_params)
-        return output[0].outputs[0].text
+        return output[0].outputs[0].text.strip().lower()
     return predict
 
 
@@ -114,8 +119,14 @@ if __name__ == "__main__":
     # Choose backend
     if args.llm == "local":
         try:
-            llm = LLM(model="facebook/opt-125m")
-            sampling_params = SamplingParams(temperature=0.0, top_p=1.0)
+            llm = LLM(model="meta-llama/Meta-Llama-3.1-8B-Instruct")
+            sampling_params = SamplingParams(
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=1,
+            stop=["\n", ".", ","],
+        )
+
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
