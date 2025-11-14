@@ -119,7 +119,7 @@ if __name__ == "__main__":
     # Choose backend
     if args.llm == "local":
         try:
-            llm = LLM(model="meta-llama/Meta-Llama-3.1-8B-Instruct")
+            llm = LLM(model="mistralai/Mistral-7B-Instruct-v0.3")
             sampling_params = SamplingParams(
             temperature=0.0,
             top_p=1.0,
