@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 from typing import Callable, Iterable, List, Tuple
+from vllm import LLM, SamplingParams
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -18,9 +19,10 @@ def get_env(name: str, default: str = "") -> str:
     return value
 
 
-def build_llm_method_local() -> Callable[[str], str]:
+def build_llm_method_local(llm: LLM, sampling_params: SamplingParams) -> Callable[[str], str]:
     def predict(prompt: str) -> str:
-        return "maybe"
+        output = llm.generate([prompt], sampling_params)
+        return output[0].outputs[0].text
     return predict
 
 
@@ -110,7 +112,13 @@ if __name__ == "__main__":
 
     # Choose backend
     if args.llm == "local":
-        method = build_llm_method_local()
+        try:
+            llm = LLM(model="facebook/opt-125m")
+            sampling_params = SamplingParams(temperature=0.0, top_p=1.0)
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+        method = build_llm_method_local(llm, sampling_params)
     else:
         try:
             client = init_azure_openai_client()
