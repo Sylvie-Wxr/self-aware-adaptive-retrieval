@@ -20,7 +20,8 @@ def get_env(name: str, default: str = "") -> str:
 
 
 def build_llm_method_local(llm: LLM, sampling_params: SamplingParams) -> Callable[[str], str]:
-    def predict(prompt: str) -> str:
+    def predict(question: str) -> str:
+        prompt = f"Answer ONLY one of: yes, no, maybe. No explanations. You are a medical professional. {question}"
         output = llm.generate([prompt], sampling_params)
         return output[0].outputs[0].text
     return predict
