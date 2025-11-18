@@ -46,10 +46,10 @@ class PubMedQARetriever:
     """
     Retriever for PubMedQA vectorstore.
 
-    Assumes build_vectorstore.py wrote:
+    build_vectorstore.py wrote:
       - index.faiss
       - meta.jsonl (with keys: id, pubid, final_decision, question, is_chunk)
-      - stats.json (optional, not required here)
+      - stats.json
     """
 
     def __init__(self, index_dir: str, model_name: str = "BAAI/bge-large-en-v1.5"):
@@ -192,3 +192,4 @@ class PubMedQARetriever:
 
 def get_retriever(index_dir: str, model_name: str = "BAAI/bge-large-en-v1.5") -> PubMedQARetriever:
     return PubMedQARetriever(index_dir=index_dir, model_name=model_name)
+

@@ -1,7 +1,7 @@
 import os
 import sys
 import argparse
-from typing import Callable, Iterable, List, Tuple
+from typing import Callable, Iterable, List, Tuple, Optional
 from vllm import LLM, SamplingParams
 
 from dotenv import load_dotenv
@@ -12,6 +12,8 @@ from datasets import load_dataset
 from ratelimit import limits, sleep_and_retry
 from openai import AzureOpenAI
 
+from retrieve import PubMedQARetriever, get_retriever
+
 def get_env(name: str, default: str = "") -> str:
     value = os.getenv(name, default)
     if value is None or value == "":
@@ -19,14 +21,33 @@ def get_env(name: str, default: str = "") -> str:
     return value
 
 
-def build_llm_method_local(llm: LLM, sampling_params: SamplingParams) -> Callable[[str], str]:
+def build_llm_method_local(
+    llm: LLM, 
+    sampling_params: SamplingParams,
+    retriever: Optional[PubMedQARetriever] = None,
+    top_k: int = 3
+) -> Callable[[str], str]:
     def predict(question: str) -> str:
+        context_block = ""
+        if retriever is not None:
+            contexts = retriever.retrieve(question, top_k=top_k)
+            if contexts:
+                joined = "\n\n---\n\n".join(contexts)
+                context_block = (
+                    "You are given several PubMed article abstracts.\n"
+                    "Answer the question ONLY based on these abstracts.\n"
+                    "If the information is insufficient, answer 'maybe'.\n\n"
+                    f"Contexts:\n{joined}\n\n"
+                )
         prompt = (
             "You must answer strictly with one label: yes, no, or maybe.\n"
-            "No explanations. Only output the label.\n"
-            f"Question: {question}\n"
-            "Answer:"
+            "No explanations. Only output the label.\n\n"
         )
+        if context_block:
+            prompt += context_block
+
+        prompt += f"Question: {question}\nAnswer:"
+
         output = llm.generate([prompt], sampling_params)
         return output[0].outputs[0].text.strip().lower()
     return predict
@@ -103,10 +124,22 @@ def hallucination_rate(y_true: List[str], y_pred: List[str]) -> float:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate PubMedQA yes/no/maybe baseline.")
-    parser.add_argument("--model", type=str, default="no-rag", choices=["no-rag"], help="Evaluation model (only 'no-rag' supported).")
+    parser.add_argument("--model", type=str, default="no-rag", choices=["no-rag", "rag-always"], help="Evaluation model: no-rag or rag-always.")
     parser.add_argument("--llm", type=str, required=True, choices=["local", "api"], help="LLM backend: local heuristic or Azure API.")
     parser.add_argument("--n", type=int, default=50, help="Number of labeled samples to evaluate (default: 50).")
     parser.add_argument("--deployment", type=str, default=get_env("AZURE_OPENAI_DEPLOYMENT", "gpt-5-nano"), help="Azure deployment name (default from env or 'gpt-5-nano').")
+    parser.add_argument(
+        "--retriever_model",
+        type=str,
+        default="BAAI/bge-large-en-v1.5",
+        help="Embedding model name used when building the index.",
+    )
+    parser.add_argument(
+        "--rag_top_k",
+        type=int,
+        default=3,
+        help="Top-k contexts to retrieve when using RAG.",
+    )
     args = parser.parse_args()
 
     # Load datasets
@@ -115,6 +148,15 @@ if __name__ == "__main__":
     artificial_dataset = load_dataset("qiaojin/PubMedQA", "pqa_artificial", split="train")
     print(f"labeled_dataset rows: {len(labeled_dataset)}")
     print(f"artificial_dataset rows: {len(artificial_dataset)}")
+    
+    # Decide whether to use RAG
+    # use_rag = args.model == "rag-always"
+    # retriever: Optional[PubMedQARetriever] = None
+    # if use_rag:
+    #     print(f"[Eval] Using RAG with index_dir={args.index_dir}, retriever_model={args.retriever_model}")
+    #     retriever = get_retriever(index_dir=args.index_dir, model_name=args.retriever_model)
+    # else:
+    #     print("[Eval] Running no-rag baseline (question only).")
 
     # Choose backend
     if args.llm == "local":
