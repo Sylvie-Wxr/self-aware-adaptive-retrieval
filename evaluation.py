@@ -129,6 +129,12 @@ if __name__ == "__main__":
     parser.add_argument("--n", type=int, default=50, help="Number of labeled samples to evaluate (default: 50).")
     parser.add_argument("--deployment", type=str, default=get_env("AZURE_OPENAI_DEPLOYMENT", "gpt-5-nano"), help="Azure deployment name (default from env or 'gpt-5-nano').")
     parser.add_argument(
+    "--index_dir",
+    type=str,
+    default="/projects/insightx-lab/xinruiwu/pubmedqa_index_full_bge",
+    help="Directory of FAISS index (index.faiss + meta.jsonl) for RAG.",
+    )
+    parser.add_argument(
         "--retriever_model",
         type=str,
         default="BAAI/bge-large-en-v1.5",
@@ -150,13 +156,13 @@ if __name__ == "__main__":
     print(f"artificial_dataset rows: {len(artificial_dataset)}")
     
     # Decide whether to use RAG
-    # use_rag = args.model == "rag-always"
-    # retriever: Optional[PubMedQARetriever] = None
-    # if use_rag:
-    #     print(f"[Eval] Using RAG with index_dir={args.index_dir}, retriever_model={args.retriever_model}")
-    #     retriever = get_retriever(index_dir=args.index_dir, model_name=args.retriever_model)
-    # else:
-    #     print("[Eval] Running no-rag baseline (question only).")
+    use_rag = (args.model == "rag-always") and (args.llm == "local")
+    retriever: Optional[PubMedQARetriever] = None
+    if use_rag:
+        print(f"[Eval] Using RAG with index_dir={args.index_dir}, retriever_model={args.retriever_model}")
+        retriever = get_retriever(index_dir=args.index_dir, model_name=args.retriever_model)
+    else:
+        print("[Eval] Running no-rag baseline (question only).")
 
     # Choose backend
     if args.llm == "local":
@@ -172,7 +178,11 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
-        method = build_llm_method_local(llm, sampling_params)
+        method = build_llm_method_local(
+            llm, 
+            sampling_params,
+            retriever=retriever,
+            top_k=args.rag_top_k, )
     else:
         try:
             client = init_azure_openai_client()
