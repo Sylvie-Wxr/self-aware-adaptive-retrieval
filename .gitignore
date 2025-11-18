@@ -30,3 +30,7 @@ huggingface/
 
 # macOS junk
 .DS_Store
+
+# Test data
+/data
+test_retriever.py 
