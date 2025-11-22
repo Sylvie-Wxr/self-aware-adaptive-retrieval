@@ -35,7 +35,7 @@ huggingface/
 /data
 test_retriever.py 
 
-# HPC sbatch scripts
+# HPC scripts
 *.sbatch
 
 # HPC logs
