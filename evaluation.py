@@ -25,12 +25,18 @@ def build_llm_method_local(
     llm: LLM, 
     sampling_params: SamplingParams,
     retriever: Optional[PubMedQARetriever] = None,
-    top_k: int = 3
+    top_k: int = 3,
+    include_labels: bool = True,
+    include_meshes: bool = True,
 ) -> Callable[[str], str]:
     def predict(question: str) -> str:
         context_block = ""
         if retriever is not None:
-            contexts = retriever.retrieve(question, top_k=top_k)
+            contexts = retriever.retrieve(
+                question, 
+                top_k=top_k, 
+                include_labels=include_labels,
+                include_meshes=include_meshes)
             if contexts:
                 joined = "\n\n---\n\n".join(contexts)
                 context_block = (
@@ -151,9 +157,7 @@ if __name__ == "__main__":
     # Load datasets
     print("Loading PubMedQA datasets...")
     labeled_dataset = load_dataset("qiaojin/PubMedQA", "pqa_labeled", split="train")
-    artificial_dataset = load_dataset("qiaojin/PubMedQA", "pqa_artificial", split="train")
     print(f"labeled_dataset rows: {len(labeled_dataset)}")
-    print(f"artificial_dataset rows: {len(artificial_dataset)}")
     
     # Decide whether to use RAG
     use_rag = (args.model == "rag-always") and (args.llm == "local")
@@ -182,7 +186,9 @@ if __name__ == "__main__":
             llm, 
             sampling_params,
             retriever=retriever,
-            top_k=args.rag_top_k, )
+            top_k=args.rag_top_k,
+            include_labels=True,
+            include_meshes=True)
     else:
         try:
             client = init_azure_openai_client()
@@ -194,12 +200,50 @@ if __name__ == "__main__":
     # Evaluate
     n = min(args.n, len(labeled_dataset))
     subset = labeled_dataset.select(range(n))
-    y_true, y_pred = run_eval(method, subset)
+    # local + rag-always: sweep topk from 1 to 5, with/without label+mesh
+    if args.llm == "local" and use_rag:
+        topk_values = [1, 2, 3, 4, 5]
+        settings = [
+            ("with_labels_mesh", True, True),
+            ("no_labels_mesh", False, False),
+        ]
 
-    accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
-    hallu = hallucination_rate(y_true, y_pred)
-    print(f"\nAccuracy on first {n}: {accuracy:.4f}")
-    print(f"Hallucination rate on first {n}: {hallu:.4f}")
+        for setting_name, include_labels, include_meshes in settings:
+            print(f"\n==============================")
+            print(f"Setting: {setting_name}")
+            print(f"include_labels={include_labels}, include_meshes={include_meshes}")
+            print(f"==============================")
+
+            for k in topk_values:
+                print(f"\n--- top_k = {k} ---")
+
+                # Each setting configures a method
+                method_for_config = build_llm_method_local(
+                    llm,
+                    sampling_params,
+                    retriever=retriever,
+                    top_k=k,
+                    include_labels=include_labels,
+                    include_meshes=include_meshes,
+                )
+
+                y_true, y_pred = run_eval(method_for_config, subset)
+                accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
+                hallu = hallucination_rate(y_true, y_pred)
+
+                print(f"Accuracy on first {n}: {accuracy:.4f}")
+                print(f"Hallucination rate on first {n}: {hallu:.4f}")
+
+    # no-rag local or api
+    else:
+        if method is None:
+            raise RuntimeError("Method is None in non-RAG branch, this should not happen.")
+
+        y_true, y_pred = run_eval(method, subset)
+        accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
+        hallu = hallucination_rate(y_true, y_pred)
+        print(f"\nAccuracy on first {n}: {accuracy:.4f}")
+        print(f"Hallucination rate on first {n}: {hallu:.4f}")
 
 
 

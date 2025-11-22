@@ -64,7 +64,7 @@ class PubMedQARetriever:
         self.embed_model = SentenceTransformer(self.model_name)
 
         # 3) pubid -> context (load from pqa_artificial)
-        self.pubid_to_context = self._build_pubid_context_map()
+        self.pubid_to_example = self._build_pubid_example_map()
 
     # ---------- private helpers ----------
 
@@ -89,19 +89,17 @@ class PubMedQARetriever:
                 id_to_meta[idx] = row
         return id_to_meta
 
-    def _build_pubid_context_map(self) -> Dict[str, str]:
+    def _build_pubid_example_map(self) -> Dict[str, dict]:
         """
         Build mapping: pubid -> full abstract text.
         """
         print("[Retriever] Loading PubMedQA pqa_artificial for context mapping...")
         ds = load_dataset("qiaojin/PubMedQA", "pqa_artificial", split="train")
 
-        mapping: Dict[str, str] = {}
+        mapping: Dict[str, dict] = {}
         for ex in ds:
             pubid = ex["pubid"]
-            text = extract_context(ex, include_labels=True, include_meshes=True)
-            if text:
-                mapping[pubid] = text
+            mapping[pubid] = ex
 
         print(f"[Retriever] Built pubid_to_context map, size = {len(mapping)}")
         return mapping
@@ -115,7 +113,13 @@ class PubMedQARetriever:
         return q_emb
 
     # ---------- public API ----------
-    def retrieve(self, question: str, top_k: int = 5) -> List[str]:
+    def retrieve(
+        self,
+        question: str,
+        top_k: int = 5,
+        include_labels: bool = True,
+        include_meshes: bool = True
+    ) -> List[str]:
         """
         Return a list of top-k context texts (abstracts) for the given question.
         """
@@ -138,8 +142,16 @@ class PubMedQARetriever:
             if pubid in seen_pubids:
                 continue
             seen_pubids.add(pubid)
+            
+            ex = self.pubid_to_example.get(pubid)
+            if not ex:
+                continue
 
-            ctx = self.pubid_to_context.get(pubid, "").strip()
+            ctx = extract_context(
+                ex,
+                include_labels=include_labels,
+                include_meshes=include_meshes,
+            ).strip()
             if not ctx:
                 continue
 
@@ -150,7 +162,13 @@ class PubMedQARetriever:
 
         return contexts
 
-    def retrieve_with_metadata(self, question: str, top_k: int = 5) -> List[dict]:
+    def retrieve_with_metadata(
+        self,
+        question: str,
+        top_k: int = 5,
+        include_labels: bool = True,
+        include_meshes: bool = True
+    ) -> List[dict]:
         # q_emb: shape (1, dim), float32
         q_emb = self._embed_query(question)
         scores, ids = self.index.search(q_emb, top_k * 2) 
@@ -170,8 +188,16 @@ class PubMedQARetriever:
             if pubid in seen_pubids:
                 continue
             seen_pubids.add(pubid)
+            
+            ex = self.pubid_to_example.get(pubid)
+            if not ex:
+                continue
 
-            ctx = self.pubid_to_context.get(pubid, "").strip()
+            ctx = extract_context(
+                ex,
+                include_labels=include_labels,
+                include_meshes=include_meshes,
+            ).strip()
             if not ctx:
                 continue
 
@@ -188,8 +214,35 @@ class PubMedQARetriever:
 
         return results
 
-
-
 def get_retriever(index_dir: str, model_name: str = "BAAI/bge-large-en-v1.5") -> PubMedQARetriever:
     return PubMedQARetriever(index_dir=index_dir, model_name=model_name)
 
+dir = "/Users/xinruiwu/Desktop/cs6140/self-aware-adaptive-retrieval/data/index_debug_cpu"
+model = "sentence-transformers/all-MiniLM-L6-v2"
+retriever = PubMedQARetriever(dir, model)
+question = "Do large portion sizes increase bite size and eating rate in overweight women?"
+
+print("\n--- with labels + MeSH ---")
+ctxs = retriever.retrieve(
+    question,
+    top_k=3,
+    include_labels=True,
+    include_meshes=True,
+)
+for i, c in enumerate(ctxs, 1):
+        print(f"\n[{i}]")
+        print(c[-400:], "...\n")
+        
+print("\n--- without labels / without MeSH ---")
+ctxs2 = retriever.retrieve(
+    question,
+    top_k=3,
+    include_labels=False,
+    include_meshes=False,
+)
+
+for i, c in enumerate(ctxs2, 1):
+    print(f"\n[{i}]")
+    print(c[-400:], "...\n")
+
+print("Done.")
