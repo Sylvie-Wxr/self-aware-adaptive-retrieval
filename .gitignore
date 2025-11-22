@@ -34,3 +34,12 @@ huggingface/
 # Test data
 /data
 test_retriever.py 
+
+# HPC sbatch scripts
+*.sbatch
+
+# HPC logs
+logs/
+*.out
+*.err
+
