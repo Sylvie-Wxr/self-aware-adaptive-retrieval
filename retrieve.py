@@ -216,33 +216,3 @@ class PubMedQARetriever:
 
 def get_retriever(index_dir: str, model_name: str = "BAAI/bge-large-en-v1.5") -> PubMedQARetriever:
     return PubMedQARetriever(index_dir=index_dir, model_name=model_name)
-
-dir = "/Users/xinruiwu/Desktop/cs6140/self-aware-adaptive-retrieval/data/index_debug_cpu"
-model = "sentence-transformers/all-MiniLM-L6-v2"
-retriever = PubMedQARetriever(dir, model)
-question = "Do large portion sizes increase bite size and eating rate in overweight women?"
-
-print("\n--- with labels + MeSH ---")
-ctxs = retriever.retrieve(
-    question,
-    top_k=3,
-    include_labels=True,
-    include_meshes=True,
-)
-for i, c in enumerate(ctxs, 1):
-        print(f"\n[{i}]")
-        print(c[-400:], "...\n")
-        
-print("\n--- without labels / without MeSH ---")
-ctxs2 = retriever.retrieve(
-    question,
-    top_k=3,
-    include_labels=False,
-    include_meshes=False,
-)
-
-for i, c in enumerate(ctxs2, 1):
-    print(f"\n[{i}]")
-    print(c[-400:], "...\n")
-
-print("Done.")
