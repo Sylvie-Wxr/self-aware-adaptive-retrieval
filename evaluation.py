@@ -4,6 +4,8 @@ import argparse
 from typing import Callable, Iterable, List, Tuple, Optional
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
+import json
+import logging
 from vllm import LLM, SamplingParams
 
 from dotenv import load_dotenv
@@ -16,7 +18,7 @@ from openai import AzureOpenAI
 
 from retrieve import PubMedQARetriever, get_retriever
 
-RESULTS_DIR = "/home/wu.xinrui/ondemand/dev/self-aware-adaptive-retrieval/results"
+DEFAULT_RESULTS_BASE = "/Users/xinruiwu/Desktop/cs6140/self-aware-adaptive-retrieval/results"
 
 def get_env(name: str, default: str = "") -> str:
     value = os.getenv(name, default)
@@ -102,7 +104,7 @@ def build_llm_method_api(client: AzureOpenAI, deployment: str) -> Callable[[str]
         return content
     return get_llm_response
 
-def run_check_data(labeled_dataset) -> None:
+def run_check_data(labeled_dataset, results_dir: str) -> None:
     """EDA: missing values, describe, label distribution + plot."""
     import pandas as pd
     import seaborn as sns
@@ -127,7 +129,7 @@ def run_check_data(labeled_dataset) -> None:
     print("\n".join(text_report))
 
     # Save text report
-    overview_path = f"{RESULTS_DIR}/data_overview.txt"
+    overview_path = os.path.join(results_dir, "data_overview.txt")
     with open(overview_path, "w") as f:
         f.write("\n".join(text_report))
 
@@ -136,7 +138,7 @@ def run_check_data(labeled_dataset) -> None:
     sns.countplot(x=df["final_decision"])
     plt.title("Label Distribution")
     plt.tight_layout()
-    ld_path = f"{RESULTS_DIR}/label_distribution.png"
+    ld_path = os.path.join(results_dir, "label_distribution.png")
     plt.savefig(ld_path)
     plt.close()
 
@@ -179,6 +181,7 @@ def run_rag_eval(
     retriever,
     subset,
     n: int,
+    results_dir: str
 ) -> None:
     """local + rag-always: sweep top_k / labels+MeSH, 
     Write to CSV + Curve + best confusion matrix."""
@@ -191,7 +194,7 @@ def run_rag_eval(
     all_accuracies: dict[str, list[float]] = {}
     all_hallus: dict[str, list[float]] = {}
 
-    sweep_path = f"{RESULTS_DIR}/rag_sweep_metrics.csv"
+    sweep_path = os.path.join(results_dir, "rag_sweep_metrics.csv")
     with open(sweep_path, "w") as f_metrics:
         # CSV header
         f_metrics.write(
@@ -268,7 +271,7 @@ def run_rag_eval(
         plt.ylabel("Accuracy")
         plt.title(f"Accuracy vs top_k ({setting_name})")
         plt.tight_layout()
-        acc_path = f"{RESULTS_DIR}/accuracy_vs_topk_{setting_name}.png"
+        acc_path = os.path.join(results_dir, f"accuracy_vs_topk_{setting_name}.png")
         plt.savefig(acc_path)
         plt.close()
 
@@ -279,7 +282,7 @@ def run_rag_eval(
         plt.ylabel("Hallucination rate")
         plt.title(f"Hallucination vs top_k ({setting_name})")
         plt.tight_layout()
-        hallu_path = f"{RESULTS_DIR}/hallucination_vs_topk_{setting_name}.png"
+        hallu_path = os.path.join(results_dir, f"hallucination_vs_topk_{setting_name}.png")
         plt.savefig(hallu_path)
         plt.close()
 
@@ -302,7 +305,7 @@ def run_rag_eval(
         disp.plot(values_format="d")
         plt.title("Confusion Matrix (best RAG config)")
         plt.tight_layout()
-        cm_path = f"{RESULTS_DIR}/confusion_matrix_best_rag.png"
+        cm_path = os.path.join(results_dir, "confusion_matrix_best_rag.png")
         plt.savefig(cm_path)
         plt.close()
 
@@ -313,6 +316,7 @@ def run_baseline_eval(
     subset,
     n: int,
     args: argparse.Namespace,
+    results_dir: str,  
 ) -> None:
     """no-rag local or API baseline: Run once + confusion matrix + metrics file。"""
     y_true, y_pred = run_eval(method, subset)
@@ -331,14 +335,14 @@ def run_baseline_eval(
     disp.plot(values_format="d")
     plt.title(f"Confusion Matrix ({args.model}, {args.llm})")
     plt.tight_layout()
-    cm_path = f"{RESULTS_DIR}/confusion_matrix_{args.model}_{args.llm}.png"
+    cm_path = os.path.join(results_dir, f"confusion_matrix_{args.model}_{args.llm}.png")
     plt.savefig(cm_path)
     plt.close()
 
     print(f"[INFO] Confusion matrix saved to {cm_path}")
 
     # Save baseline metrics
-    baseline_path = f"{RESULTS_DIR}/baseline_metrics_{args.model}_{args.llm}.txt"
+    baseline_path = os.path.join(results_dir, f"baseline_metrics_{args.model}_{args.llm}.txt")
     with open(baseline_path, "w") as f:
         f.write(f"model={args.model}\n")
         f.write(f"llm={args.llm}\n")
@@ -373,7 +377,47 @@ if __name__ == "__main__":
         default=3,
         help="Top-k contexts to retrieve when using RAG.",
     )
+    parser.add_argument(
+    "--results-dir",
+    type=str,
+    default=DEFAULT_RESULTS_BASE,
+    help="Base directory to store all evaluation outputs.",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Optional name for this run; if not set, a timestamp-based name will be used.",
+    )
     args = parser.parse_args()
+    
+    # Generate run_time
+    if args.run_name is None:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.run_name = f"{ts}_{args.llm}_{args.model}_n{args.n}"
+
+    RESULTS_DIR = os.path.join(args.results_dir, args.run_name)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    
+    # Save run config to json
+    config_path = os.path.join(RESULTS_DIR, "config.json")
+    with open(config_path, "w") as f:
+        json.dump(vars(args), f, indent=2)
+    print(f"[INFO] Saved run config to {config_path}")
+    
+    # Init logger
+    log_path = os.path.join(RESULTS_DIR, "stdout.log")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_path),
+            logging.StreamHandler(sys.stdout),  # print to terminal
+        ],
+    )
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting evaluation with args: {args}")
 
     # Load datasets
     print("Loading PubMedQA datasets...")
@@ -382,7 +426,7 @@ if __name__ == "__main__":
     
     # Check data and plt label distribution
     if args.check_data:
-        run_check_data(labeled_dataset)
+        run_check_data(labeled_dataset, RESULTS_DIR)
         sys.exit(0)
 
     
@@ -416,7 +460,7 @@ if __name__ == "__main__":
             
         if use_rag:
             # local + rag-always → RAG sweep
-            run_rag_eval(llm, sampling_params, retriever, subset, n)
+            run_rag_eval(llm, sampling_params, retriever, subset, n, RESULTS_DIR)
         else:
             # local + no-rag baseline
             method = build_llm_method_local(
@@ -426,7 +470,7 @@ if __name__ == "__main__":
                 top_k=args.rag_top_k,
                 include_labels=True,
                 include_meshes=True)
-            run_baseline_eval(method, subset, n, args)
+            run_baseline_eval(method, subset, n, args, RESULTS_DIR)
     
     # API base line, no rag
     else:
