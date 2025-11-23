@@ -244,12 +244,12 @@ def run_rag_eval(
                 accuracies.append(accuracy)
                 hallus.append(hallu)
 
-                # Update best config
-                if (accuracy > best_accuracy) or (
-                    np.isclose(accuracy, best_accuracy) and hallu < best_hallu
+                # Update best config based on hallucination first
+                if (hallu < best_hallu) or (
+                    np.isclose(hallu, best_hallu) and accuracy > best_accuracy
                 ):
-                    best_accuracy = accuracy
                     best_hallu = hallu
+                    best_accuracy = accuracy
                     best_config = (setting_name, k, include_labels, include_meshes)
                     best_y_true = y_true
                     best_y_pred = y_pred
@@ -401,10 +401,18 @@ if __name__ == "__main__":
     os.makedirs(RESULTS_DIR, exist_ok=True)
     
     # Save run config to json
+    config = vars(args).copy()
+
+    # If using local LLM, deployment is irrelevant → remove it for cleaner logs
+    if args.llm == "local":
+        config.pop("deployment", None)
+
     config_path = os.path.join(RESULTS_DIR, "config.json")
     with open(config_path, "w") as f:
-        json.dump(vars(args), f, indent=2)
+        json.dump(config, f, indent=2)
+
     print(f"[INFO] Saved run config to {config_path}")
+
     
     # Init logger
     log_path = os.path.join(RESULTS_DIR, "stdout.log")
