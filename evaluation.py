@@ -18,7 +18,7 @@ from openai import AzureOpenAI
 
 from retrieve import PubMedQARetriever, get_retriever
 
-DEFAULT_RESULTS_BASE = "/Users/xinruiwu/Desktop/cs6140/self-aware-adaptive-retrieval/results"
+RESULTS_DIR = "/home/wu.xinrui/ondemand/dev/self-aware-adaptive-retrieval/results"
 
 def get_env(name: str, default: str = "") -> str:
     value = os.getenv(name, default)
