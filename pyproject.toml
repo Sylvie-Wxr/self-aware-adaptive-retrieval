@@ -11,4 +11,5 @@ dependencies = [
     "openai",
     "python-dotenv",
     "vllm>=0.11.0",
+    "seaborn>=0.13.2",
 ]

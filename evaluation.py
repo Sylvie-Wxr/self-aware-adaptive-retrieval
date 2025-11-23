@@ -2,6 +2,8 @@ import os
 import sys
 import argparse
 from typing import Callable, Iterable, List, Tuple, Optional
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt
 from vllm import LLM, SamplingParams
 
 from dotenv import load_dotenv
@@ -13,6 +15,8 @@ from ratelimit import limits, sleep_and_retry
 from openai import AzureOpenAI
 
 from retrieve import PubMedQARetriever, get_retriever
+
+RESULTS_DIR = "/home/wu.xinrui/ondemand/dev/self-aware-adaptive-retrieval/results"
 
 def get_env(name: str, default: str = "") -> str:
     value = os.getenv(name, default)
@@ -98,6 +102,48 @@ def build_llm_method_api(client: AzureOpenAI, deployment: str) -> Callable[[str]
         return content
     return get_llm_response
 
+def run_check_data(labeled_dataset) -> None:
+    """EDA: missing values, describe, label distribution + plot."""
+    import pandas as pd
+    import seaborn as sns
+
+    df = pd.DataFrame(labeled_dataset)
+
+    text_report: list[str] = []
+
+    # Missing values
+    text_report.append("=== Missing Value Summary ===")
+    text_report.append(str(df.isnull().sum()))
+
+    # Describe
+    text_report.append("\n=== Dataset Overview ===")
+    text_report.append(str(df.describe(include="all")))
+
+    # Label distribution
+    text_report.append("\n=== Label Distribution ===")
+    text_report.append(str(df["final_decision"].value_counts()))
+
+    # Print to console
+    print("\n".join(text_report))
+
+    # Save text report
+    overview_path = f"{RESULTS_DIR}/data_overview.txt"
+    with open(overview_path, "w") as f:
+        f.write("\n".join(text_report))
+
+    # Label distribution plot
+    plt.figure(figsize=(6, 4))
+    sns.countplot(x=df["final_decision"])
+    plt.title("Label Distribution")
+    plt.tight_layout()
+    ld_path = f"{RESULTS_DIR}/label_distribution.png"
+    plt.savefig(ld_path)
+    plt.close()
+
+    print("\n[INFO] Data check completed. Exiting because --check-data was used.")
+    print(f"[INFO] Text report saved to {overview_path}")
+    print(f"[INFO] Plot saved to {ld_path}")
+
 
 def run_eval(method: Callable[[str], str], data: Iterable[dict]) -> Tuple[List[str], List[str]]:
     y_true, y_pred = [], []
@@ -108,7 +154,6 @@ def run_eval(method: Callable[[str], str], data: Iterable[dict]) -> Tuple[List[s
         y_pred.append(pred)
         print(f"Q{i}: predict={pred} | gold={gold}")
     return y_true, y_pred
-
 
 def hallucination_rate(y_true: List[str], y_pred: List[str]) -> float:
     """
@@ -128,8 +173,184 @@ def hallucination_rate(y_true: List[str], y_pred: List[str]) -> float:
     return hallucinations / total if total > 0 else 0.0
 
 
+def run_rag_eval(
+    llm: LLM,
+    sampling_params: SamplingParams,
+    retriever,
+    subset,
+    n: int,
+) -> None:
+    """local + rag-always: sweep top_k / labels+MeSH, 
+    Write to CSV + Curve + best confusion matrix."""
+    topk_values = [1, 2, 3, 4, 5]
+    settings = [
+        ("with_labels_mesh", True, True),
+        ("no_labels_mesh", False, False),
+    ]
+
+    all_accuracies: dict[str, list[float]] = {}
+    all_hallus: dict[str, list[float]] = {}
+
+    sweep_path = f"{RESULTS_DIR}/rag_sweep_metrics.csv"
+    with open(sweep_path, "w") as f_metrics:
+        # CSV header
+        f_metrics.write(
+            "setting_name,include_labels,include_meshes,top_k,accuracy,hallucination\n"
+        )
+
+        best_config = None
+        best_accuracy = -1.0
+        best_hallu = 1.0
+        best_y_true: Optional[List[str]] = None
+        best_y_pred: Optional[List[str]] = None
+
+        for setting_name, include_labels, include_meshes in settings:
+            print("\n==============================")
+            print(f"Setting: {setting_name}")
+            print(f"include_labels={include_labels}, include_meshes={include_meshes}")
+            print("==============================")
+
+            accuracies: List[float] = []
+            hallus: List[float] = []
+
+            for k in topk_values:
+                print(f"\n--- top_k = {k} ---")
+
+                method_for_config = build_llm_method_local(
+                    llm,
+                    sampling_params,
+                    retriever=retriever,
+                    top_k=k,
+                    include_labels=include_labels,
+                    include_meshes=include_meshes,
+                )
+
+                y_true, y_pred = run_eval(method_for_config, subset)
+                accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
+                hallu = hallucination_rate(y_true, y_pred)
+
+                # Write to CSV
+                f_metrics.write(
+                    f"{setting_name},{int(include_labels)},{int(include_meshes)},"
+                    f"{k},{accuracy:.6f},{hallu:.6f}\n"
+                )
+
+                print(f"Accuracy on first {n}: {accuracy:.4f}")
+                print(f"Hallucination rate on first {n}: {hallu:.4f}")
+
+                accuracies.append(accuracy)
+                hallus.append(hallu)
+
+                # Update best config
+                if (accuracy > best_accuracy) or (
+                    np.isclose(accuracy, best_accuracy) and hallu < best_hallu
+                ):
+                    best_accuracy = accuracy
+                    best_hallu = hallu
+                    best_config = (setting_name, k, include_labels, include_meshes)
+                    best_y_true = y_true
+                    best_y_pred = y_pred
+
+            all_accuracies[setting_name] = accuracies
+            all_hallus[setting_name] = hallus
+
+    print(f"[INFO] RAG sweep metrics saved to {sweep_path}")
+
+    # Plot Accuracy / Hallucination vs top_k curve for each setting
+    for setting_name, include_labels, include_meshes in settings:
+        accuracies = all_accuracies[setting_name]
+        hallus = all_hallus[setting_name]
+
+        # Accuracy curve
+        plt.figure()
+        plt.plot(topk_values, accuracies, marker="o")
+        plt.xlabel("top_k")
+        plt.ylabel("Accuracy")
+        plt.title(f"Accuracy vs top_k ({setting_name})")
+        plt.tight_layout()
+        acc_path = f"{RESULTS_DIR}/accuracy_vs_topk_{setting_name}.png"
+        plt.savefig(acc_path)
+        plt.close()
+
+        # Hallucination curve
+        plt.figure()
+        plt.plot(topk_values, hallus, marker="o")
+        plt.xlabel("top_k")
+        plt.ylabel("Hallucination rate")
+        plt.title(f"Hallucination vs top_k ({setting_name})")
+        plt.tight_layout()
+        hallu_path = f"{RESULTS_DIR}/hallucination_vs_topk_{setting_name}.png"
+        plt.savefig(hallu_path)
+        plt.close()
+
+        print(f"[INFO] Saved curves for setting={setting_name} to:")
+        print(f"       {acc_path}")
+        print(f"       {hallu_path}")
+
+    # best config's confusion matrix
+    if best_y_true is not None and best_y_pred is not None and best_config is not None:
+        print("\n[INFO] Best config:")
+        print(f"  setting={best_config[0]}, top_k={best_config[1]}, "
+              f"include_labels={best_config[2]}, include_meshes={best_config[3]}")
+        print(f"  best_accuracy={best_accuracy:.4f}, best_hallucination={best_hallu:.4f}")
+
+        labels = ["yes", "no", "maybe"]
+        cm = confusion_matrix(best_y_true, best_y_pred, labels=labels)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+
+        plt.figure()
+        disp.plot(values_format="d")
+        plt.title("Confusion Matrix (best RAG config)")
+        plt.tight_layout()
+        cm_path = f"{RESULTS_DIR}/confusion_matrix_best_rag.png"
+        plt.savefig(cm_path)
+        plt.close()
+
+        print(f"[INFO] Confusion matrix saved to {cm_path}")
+
+def run_baseline_eval(
+    method: Callable[[str], str],
+    subset,
+    n: int,
+    args: argparse.Namespace,
+) -> None:
+    """no-rag local or API baseline: Run once + confusion matrix + metrics file。"""
+    y_true, y_pred = run_eval(method, subset)
+    accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
+    hallu = hallucination_rate(y_true, y_pred)
+
+    print(f"\nAccuracy on first {n}: {accuracy:.4f}")
+    print(f"Hallucination rate on first {n}: {hallu:.4f}")
+
+    # Confusion matrix for baseline
+    labels = ["yes", "no", "maybe"]
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+
+    plt.figure()
+    disp.plot(values_format="d")
+    plt.title(f"Confusion Matrix ({args.model}, {args.llm})")
+    plt.tight_layout()
+    cm_path = f"{RESULTS_DIR}/confusion_matrix_{args.model}_{args.llm}.png"
+    plt.savefig(cm_path)
+    plt.close()
+
+    print(f"[INFO] Confusion matrix saved to {cm_path}")
+
+    # Save baseline metrics
+    baseline_path = f"{RESULTS_DIR}/baseline_metrics_{args.model}_{args.llm}.txt"
+    with open(baseline_path, "w") as f:
+        f.write(f"model={args.model}\n")
+        f.write(f"llm={args.llm}\n")
+        f.write(f"n={n}\n")
+        f.write(f"accuracy={accuracy:.6f}\n")
+        f.write(f"hallucination={hallu:.6f}\n")
+
+    print(f"[INFO] Baseline metrics saved to {baseline_path}")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate PubMedQA yes/no/maybe baseline.")
+    parser.add_argument("--check-data", action="store_true", help="Only check dataset missing values and exit.")
     parser.add_argument("--model", type=str, default="no-rag", choices=["no-rag", "rag-always"], help="Evaluation model: no-rag or rag-always.")
     parser.add_argument("--llm", type=str, required=True, choices=["local", "api"], help="LLM backend: local heuristic or Azure API.")
     parser.add_argument("--n", type=int, default=50, help="Number of labeled samples to evaluate (default: 50).")
@@ -159,6 +380,12 @@ if __name__ == "__main__":
     labeled_dataset = load_dataset("qiaojin/PubMedQA", "pqa_labeled", split="train")
     print(f"labeled_dataset rows: {len(labeled_dataset)}")
     
+    # Check data and plt label distribution
+    if args.check_data:
+        run_check_data(labeled_dataset)
+        sys.exit(0)
+
+    
     # Decide whether to use RAG
     use_rag = (args.model == "rag-always") and (args.llm == "local")
     retriever: Optional[PubMedQARetriever] = None
@@ -167,6 +394,10 @@ if __name__ == "__main__":
         retriever = get_retriever(index_dir=args.index_dir, model_name=args.retriever_model)
     else:
         print("[Eval] Running no-rag baseline (question only).")
+        
+    # Evaluate
+    n = min(args.n, len(labeled_dataset))
+    subset = labeled_dataset.select(range(n))
 
     # Choose backend
     if args.llm == "local":
@@ -182,13 +413,22 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
-        method = build_llm_method_local(
-            llm, 
-            sampling_params,
-            retriever=retriever,
-            top_k=args.rag_top_k,
-            include_labels=True,
-            include_meshes=True)
+            
+        if use_rag:
+            # local + rag-always → RAG sweep
+            run_rag_eval(llm, sampling_params, retriever, subset, n)
+        else:
+            # local + no-rag baseline
+            method = build_llm_method_local(
+                llm, 
+                sampling_params,
+                retriever=retriever,
+                top_k=args.rag_top_k,
+                include_labels=True,
+                include_meshes=True)
+            run_baseline_eval(method, subset, n, args)
+    
+    # API base line, no rag
     else:
         try:
             client = init_azure_openai_client()
@@ -196,54 +436,8 @@ if __name__ == "__main__":
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
         method = build_llm_method_api(client, args.deployment)
+        run_baseline_eval(method, subset, n, args)
 
-    # Evaluate
-    n = min(args.n, len(labeled_dataset))
-    subset = labeled_dataset.select(range(n))
-    # local + rag-always: sweep topk from 1 to 5, with/without label+mesh
-    if args.llm == "local" and use_rag:
-        topk_values = [1, 2, 3, 4, 5]
-        settings = [
-            ("with_labels_mesh", True, True),
-            ("no_labels_mesh", False, False),
-        ]
-
-        for setting_name, include_labels, include_meshes in settings:
-            print(f"\n==============================")
-            print(f"Setting: {setting_name}")
-            print(f"include_labels={include_labels}, include_meshes={include_meshes}")
-            print(f"==============================")
-
-            for k in topk_values:
-                print(f"\n--- top_k = {k} ---")
-
-                # Each setting configures a method
-                method_for_config = build_llm_method_local(
-                    llm,
-                    sampling_params,
-                    retriever=retriever,
-                    top_k=k,
-                    include_labels=include_labels,
-                    include_meshes=include_meshes,
-                )
-
-                y_true, y_pred = run_eval(method_for_config, subset)
-                accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
-                hallu = hallucination_rate(y_true, y_pred)
-
-                print(f"Accuracy on first {n}: {accuracy:.4f}")
-                print(f"Hallucination rate on first {n}: {hallu:.4f}")
-
-    # no-rag local or api
-    else:
-        if method is None:
-            raise RuntimeError("Method is None in non-RAG branch, this should not happen.")
-
-        y_true, y_pred = run_eval(method, subset)
-        accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
-        hallu = hallucination_rate(y_true, y_pred)
-        print(f"\nAccuracy on first {n}: {accuracy:.4f}")
-        print(f"Hallucination rate on first {n}: {hallu:.4f}")
 
 
 
