@@ -104,48 +104,6 @@ def build_llm_method_api(client: AzureOpenAI, deployment: str) -> Callable[[str]
         return content
     return get_llm_response
 
-def run_check_data(labeled_dataset, results_dir: str) -> None:
-    """EDA: missing values, describe, label distribution + plot."""
-    import pandas as pd
-    import seaborn as sns
-
-    df = pd.DataFrame(labeled_dataset)
-
-    text_report: list[str] = []
-
-    # Missing values
-    text_report.append("=== Missing Value Summary ===")
-    text_report.append(str(df.isnull().sum()))
-
-    # Describe
-    text_report.append("\n=== Dataset Overview ===")
-    text_report.append(str(df.describe(include="all")))
-
-    # Label distribution
-    text_report.append("\n=== Label Distribution ===")
-    text_report.append(str(df["final_decision"].value_counts()))
-
-    # Print to console
-    print("\n".join(text_report))
-
-    # Save text report
-    overview_path = os.path.join(results_dir, "data_overview.txt")
-    with open(overview_path, "w") as f:
-        f.write("\n".join(text_report))
-
-    # Label distribution plot
-    plt.figure(figsize=(6, 4))
-    sns.countplot(x=df["final_decision"])
-    plt.title("Label Distribution")
-    plt.tight_layout()
-    ld_path = os.path.join(results_dir, "label_distribution.png")
-    plt.savefig(ld_path)
-    plt.close()
-
-    print("\n[INFO] Data check completed. Exiting because --check-data was used.")
-    print(f"[INFO] Text report saved to {overview_path}")
-    print(f"[INFO] Plot saved to {ld_path}")
-
 
 def run_eval(method: Callable[[str], str], data: Iterable[dict]) -> Tuple[List[str], List[str]]:
     y_true, y_pred = [], []
@@ -354,7 +312,6 @@ def run_baseline_eval(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate PubMedQA yes/no/maybe baseline.")
-    parser.add_argument("--check-data", action="store_true", help="Only check dataset missing values and exit.")
     parser.add_argument("--model", type=str, default="no-rag", choices=["no-rag", "rag-always"], help="Evaluation model: no-rag or rag-always.")
     parser.add_argument("--llm", type=str, required=True, choices=["local", "api"], help="LLM backend: local heuristic or Azure API.")
     parser.add_argument("--n", type=int, default=50, help="Number of labeled samples to evaluate (default: 50).")
@@ -432,11 +389,6 @@ if __name__ == "__main__":
     labeled_dataset = load_dataset("qiaojin/PubMedQA", "pqa_labeled", split="train")
     print(f"labeled_dataset rows: {len(labeled_dataset)}")
     
-    # Check data and plt label distribution
-    if args.check_data:
-        run_check_data(labeled_dataset, RESULTS_DIR)
-        sys.exit(0)
-
     
     # Decide whether to use RAG
     use_rag = (args.model == "rag-always") and (args.llm == "local")
