@@ -149,30 +149,28 @@ def run_rag_eval(
         ("no_labels_mesh", False, False),
     ]
 
-    all_accuracies: dict[str, list[float]] = {}
-    all_hallus: dict[str, list[float]] = {}
-
     sweep_path = os.path.join(results_dir, "rag_sweep_metrics.csv")
-    with open(sweep_path, "w") as f_metrics:
-        # CSV header
+    conf_path = os.path.join(results_dir, "rag_confusions.csv")
+    
+    with open(sweep_path, "w") as f_metrics, open(conf_path, "w") as f_conf:
+        # CSV header: metrics
         f_metrics.write(
             "setting_name,include_labels,include_meshes,top_k,accuracy,hallucination\n"
         )
+        
+        # CSV header: confusion matrix (flattened 3x3)
+        f_conf.write(
+            "setting_name,include_labels,include_meshes,top_k,"
+            "cm_yy,cm_yn,cm_ym,cm_ny,cm_nn,cm_nm,cm_my,cm_mn,cm_mm\n"
+        )
 
-        best_config = None
-        best_accuracy = -1.0
-        best_hallu = 1.0
-        best_y_true: Optional[List[str]] = None
-        best_y_pred: Optional[List[str]] = None
+        labels = ["yes", "no", "maybe"]
 
         for setting_name, include_labels, include_meshes in settings:
             print("\n==============================")
             print(f"Setting: {setting_name}")
             print(f"include_labels={include_labels}, include_meshes={include_meshes}")
             print("==============================")
-
-            accuracies: List[float] = []
-            hallus: List[float] = []
 
             for k in topk_values:
                 print(f"\n--- top_k = {k} ---")
@@ -199,75 +197,18 @@ def run_rag_eval(
                 print(f"Accuracy on first {n}: {accuracy:.4f}")
                 print(f"Hallucination rate on first {n}: {hallu:.4f}")
 
-                accuracies.append(accuracy)
-                hallus.append(hallu)
+                # Caluculate and write confusion matrix（3x3）
+                cm = confusion_matrix(y_true, y_pred, labels=labels)
 
-                # Update best config based on hallucination first
-                if (hallu < best_hallu) or (
-                    np.isclose(hallu, best_hallu) and accuracy > best_accuracy
-                ):
-                    best_hallu = hallu
-                    best_accuracy = accuracy
-                    best_config = (setting_name, k, include_labels, include_meshes)
-                    best_y_true = y_true
-                    best_y_pred = y_pred
-
-            all_accuracies[setting_name] = accuracies
-            all_hallus[setting_name] = hallus
+                # Order: [yy, yn, ym, ny, nn, nm, my, mn, mm]
+                cm_flat = cm.flatten()  # row-major,  yes row first，then no row，next maybe row
+                f_conf.write(
+                    f"{setting_name},{int(include_labels)},{int(include_meshes)},{k},"
+                    + ",".join(str(int(x)) for x in cm_flat)
+                    + "\n"
+                )
 
     print(f"[INFO] RAG sweep metrics saved to {sweep_path}")
-
-    # Plot Accuracy / Hallucination vs top_k curve for each setting
-    for setting_name, include_labels, include_meshes in settings:
-        accuracies = all_accuracies[setting_name]
-        hallus = all_hallus[setting_name]
-
-        # Accuracy curve
-        plt.figure()
-        plt.plot(topk_values, accuracies, marker="o")
-        plt.xlabel("top_k")
-        plt.ylabel("Accuracy")
-        plt.title(f"Accuracy vs top_k ({setting_name})")
-        plt.tight_layout()
-        acc_path = os.path.join(results_dir, f"accuracy_vs_topk_{setting_name}.png")
-        plt.savefig(acc_path)
-        plt.close()
-
-        # Hallucination curve
-        plt.figure()
-        plt.plot(topk_values, hallus, marker="o")
-        plt.xlabel("top_k")
-        plt.ylabel("Hallucination rate")
-        plt.title(f"Hallucination vs top_k ({setting_name})")
-        plt.tight_layout()
-        hallu_path = os.path.join(results_dir, f"hallucination_vs_topk_{setting_name}.png")
-        plt.savefig(hallu_path)
-        plt.close()
-
-        print(f"[INFO] Saved curves for setting={setting_name} to:")
-        print(f"       {acc_path}")
-        print(f"       {hallu_path}")
-
-    # best config's confusion matrix
-    if best_y_true is not None and best_y_pred is not None and best_config is not None:
-        print("\n[INFO] Best config:")
-        print(f"  setting={best_config[0]}, top_k={best_config[1]}, "
-              f"include_labels={best_config[2]}, include_meshes={best_config[3]}")
-        print(f"  best_accuracy={best_accuracy:.4f}, best_hallucination={best_hallu:.4f}")
-
-        labels = ["yes", "no", "maybe"]
-        cm = confusion_matrix(best_y_true, best_y_pred, labels=labels)
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
-
-        plt.figure()
-        disp.plot(values_format="d")
-        plt.title("Confusion Matrix (best RAG config)")
-        plt.tight_layout()
-        cm_path = os.path.join(results_dir, "confusion_matrix_best_rag.png")
-        plt.savefig(cm_path)
-        plt.close()
-
-        print(f"[INFO] Confusion matrix saved to {cm_path}")
 
 def run_baseline_eval(
     method: Callable[[str], str],
@@ -284,7 +225,7 @@ def run_baseline_eval(
     print(f"\nAccuracy on first {n}: {accuracy:.4f}")
     print(f"Hallucination rate on first {n}: {hallu:.4f}")
 
-    # Confusion matrix for baseline
+    # Confusion matrix
     labels = ["yes", "no", "maybe"]
     cm = confusion_matrix(y_true, y_pred, labels=labels)
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
