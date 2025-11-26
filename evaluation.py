@@ -231,7 +231,7 @@ def run_baseline_eval(
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
 
     plt.figure()
-    disp.plot(values_format="d")
+    disp.plot(values_format="d", cmap=plt.cm.Blues)
     plt.title(f"Confusion Matrix ({args.model}, {args.llm})")
     plt.tight_layout()
     cm_path = os.path.join(results_dir, f"confusion_matrix_{args.model}_{args.llm}.png")
