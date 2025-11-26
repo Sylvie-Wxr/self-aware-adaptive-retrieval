@@ -1,0 +1,30 @@
+=== Missing Value Summary ===
+pubid             0
+question          0
+context           0
+long_answer       0
+final_decision    0
+dtype: int64
+
+=== Dataset Overview ===
+               pubid  ... final_decision
+count   1.000000e+03  ...           1000
+unique           NaN  ...              3
+top              NaN  ...            yes
+freq             NaN  ...            552
+mean    1.962760e+07  ...            NaN
+std     5.471418e+06  ...            NaN
+min     1.571683e+06  ...            NaN
+25%     1.609964e+07  ...            NaN
+50%     2.033754e+07  ...            NaN
+75%     2.417528e+07  ...            NaN
+max     2.911256e+07  ...            NaN
+
+[11 rows x 5 columns]
+
+=== Label Distribution ===
+final_decision
+yes      552
+no       338
+maybe    110
+Name: count, dtype: int64
