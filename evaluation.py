@@ -64,6 +64,66 @@ def build_llm_method_local(
         return output[0].outputs[0].text.strip().lower()
     return predict
 
+def build_adaptive_method_local(
+    llm: LLM,
+    sampling_params: SamplingParams,
+    retriever: PubMedQARetriever,
+    top_k: int = 3,
+    include_labels: bool = True,
+    include_meshes: bool = True,
+) -> Callable[[str], str]:
+
+    def predict(question: str) -> str:
+        # Step 1: self assessment
+        first_answer, confidence = self_assess_local(llm, question)
+
+        if confidence == "high":
+            return first_answer
+
+        # Step 2: retrieve
+        contexts = retriever.retrieve(
+            question,
+            top_k=top_k,
+            include_labels=include_labels,
+            include_meshes=include_meshes,
+        )
+
+        context_block = ""
+        if contexts:
+            joined = "\n\n---\n\n".join(contexts)
+            context_block = (
+                "You are given several PubMed article abstracts.\n"
+                "Answer ONLY using these abstracts.\n"
+                "If insufficient, answer 'maybe'.\n\n"
+                f"Contexts:\n{joined}\n\n"
+            )
+
+        # Step 3: evidence-grounded final answer
+        prompt = (
+            "You must answer strictly: yes, no, or maybe.\n"
+            "No explanations.\n\n"
+        )
+        prompt += context_block
+        prompt += f"Question: {question}\nAnswer:"
+
+        out = llm.generate([prompt], sampling_params)
+        final = (out[0].outputs[0].text or "").strip().lower()
+
+        if final not in {"yes", "no", "maybe"}:
+            low = final.lower()
+            if "yes" in low:
+                final = "yes"
+            elif "no" in low:
+                final = "no"
+            elif "maybe" in low:
+                final = "maybe"
+            else:
+                final = "maybe"
+
+        return final
+
+    return predict
+
 
 def init_azure_openai_client() -> AzureOpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
@@ -250,10 +310,62 @@ def run_baseline_eval(
         f.write(f"hallucination={hallu:.6f}\n")
 
     print(f"[INFO] Baseline metrics saved to {baseline_path}")
+    
+def self_assess_local(llm: LLM, question: str) -> tuple[str, str]:
+    """
+    return: (answer, confidence)
+    answer ∈ {"yes", "no", "maybe"}
+    confidence ∈ {"high", "medium", "low"}
+    """
+    sampling_params = SamplingParams(
+        temperature=0.0,
+        top_p=1.0,
+        max_tokens=64,
+    )
+    prompt = f"""
+        You are a medical QA assistant answering PubMed-style clinical questions.
+
+        1. First, answer the question with exactly one of: "yes", "no", or "maybe".
+        2. Then, rate your confidence in that answer as one of: "high", "medium", "low".
+
+        Return your result strictly as a JSON object, for example:
+        {{"answer": "yes", "confidence": "medium"}}
+
+        Question: {question}
+    """
+    out = llm.generate([prompt], sampling_params)
+    text = out[0].outputs[0].text.strip()
+
+    # find JSON
+    try:
+        start = text.index("{")
+        end = text.rindex("}") + 1
+        json_str = text[start:end]
+        obj = json.loads(json_str)
+        ans = (obj.get("answer") or "").strip().lower()
+        conf = (obj.get("confidence") or "").strip().lower()
+    except Exception:
+        ans = "maybe"
+        for cand in ("yes", "no", "maybe"):
+            if cand in text.lower():
+                ans = cand
+                break
+        conf = "medium"
+        for cand in ("high", "medium", "low"):
+            if cand in text.lower():
+                conf = cand
+                break
+
+    if ans not in {"yes", "no", "maybe"}:
+        ans = "maybe"
+    if conf not in {"high", "medium", "low"}:
+        conf = "medium"
+
+    return ans, conf
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate PubMedQA yes/no/maybe baseline.")
-    parser.add_argument("--model", type=str, default="no-rag", choices=["no-rag", "rag-always"], help="Evaluation model: no-rag or rag-always.")
+    parser.add_argument("--model", type=str, default="no-rag", choices=["no-rag", "rag-always", "adaptive-rag"], help="Evaluation model: no-rag, rag-always or adaptive-rag.")
     parser.add_argument("--llm", type=str, required=True, choices=["local", "api"], help="LLM backend: local heuristic or Azure API.")
     parser.add_argument("--n", type=int, default=50, help="Number of labeled samples to evaluate (default: 50).")
     parser.add_argument("--deployment", type=str, default=get_env("AZURE_OPENAI_DEPLOYMENT", "gpt-5-nano"), help="Azure deployment name (default from env or 'gpt-5-nano').")
@@ -331,10 +443,10 @@ if __name__ == "__main__":
     print(f"labeled_dataset rows: {len(labeled_dataset)}")
     
     
-    # Decide whether to use RAG
-    use_rag = (args.model == "rag-always") and (args.llm == "local")
+    # Decide whether to use retriever (local + rag-always / adaptive)
+    need_retriever = (args.llm == "local") and (args.model in {"rag-always", "adaptive-rag"})
     retriever: Optional[PubMedQARetriever] = None
-    if use_rag:
+    if need_retriever:
         print(f"[Eval] Using RAG with index_dir={args.index_dir}, retriever_model={args.retriever_model}")
         retriever = get_retriever(index_dir=args.index_dir, model_name=args.retriever_model)
     else:
@@ -359,15 +471,32 @@ if __name__ == "__main__":
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
             
-        if use_rag:
+        if args.model == "rag-always":
+            if retriever is None:
+                raise RuntimeError("rag-always requires a retriever.")
             # local + rag-always → RAG sweep
             run_rag_eval(llm, sampling_params, retriever, subset, n, RESULTS_DIR)
+        
+        elif args.model == "adaptive-rag":
+        # adaptive rag
+            if retriever is None:
+                raise RuntimeError("adaptive model requires a retriever.")
+            method = build_adaptive_method_local(
+                llm,
+                sampling_params,
+                retriever=retriever,
+                top_k=args.rag_top_k,
+                include_labels=True,
+                include_meshes=True,
+            )
+            run_baseline_eval(method, subset, n, args, RESULTS_DIR)
+            
         else:
             # local + no-rag baseline
             method = build_llm_method_local(
                 llm, 
                 sampling_params,
-                retriever=retriever,
+                retriever=None,
                 top_k=args.rag_top_k,
                 include_labels=True,
                 include_meshes=True)
