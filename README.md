@@ -90,7 +90,7 @@ Prebuilt index is available under:
 ### 5.1 Run No-RAG Baseline
 
 ```bash
-uv run python evaluation.py   --llm local   --model no-rag   --n 1000   --run-name no_rag_local_1000_01   2>&1 | tee logs/no_rag_local_1000_01.log
+uv run python evaluation.py --llm local --model no-rag --n 1000   --run-name no_rag_local_1000_01 2>&1 | tee logs/no_rag_local_1000_01.log
 ```
 
 ### Output files include:
@@ -105,7 +105,7 @@ uv run python evaluation.py   --llm local   --model no-rag   --n 1000   --run-na
 ### 5.2 Run RAG-Always
 
 ```bash
-uv run python evaluation.py   --llm local   --model rag-always   --n 1000   2>&1 | tee logs/rag_always_1000_04.log
+uv run python evaluation.py --llm local --model rag-always --n 1000   2>&1 | tee logs/rag_always_1000_04.log
 ```
 
 ### Output files include:
@@ -120,7 +120,7 @@ uv run python evaluation.py   --llm local   --model rag-always   --n 1000   2>&1
 ### Optinally: 5.3 Test with api endpoint (kept for local test)
 
 ```bash
-uv run python evaluation.py   --llm api   --model no-rag   --n 1000   2>&1 | tee logs/no_rag_api_1000_04.log
+uv run python evaluation.py --llm api --model no-rag --n 1000   2>&1 | tee logs/no_rag_api_1000_04.log
 ```
 
 API will be quite slow, and not much use now. It may be removed in the final update.
@@ -131,7 +131,7 @@ API will be quite slow, and not much use now. It may be removed in the final upd
 
 ```bash
 cd scripts
-uv run python plot_rag_always.py   --csv /path/to/rag_sweep_metrics.csv   --conf-csv /path/to/rag_confusions.csv
+uv run python plot_rag_always.py --csv /path/to/rag_sweep_metrics.csv --conf-csv /path/to/rag_confusions.csv
 ```
 
 Generates:

@@ -6,6 +6,7 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 import json
 import logging
+import time
 from vllm import LLM, SamplingParams
 
 from dotenv import load_dotenv
@@ -71,58 +72,98 @@ def build_adaptive_method_local(
     top_k: int = 3,
     include_labels: bool = True,
     include_meshes: bool = True,
+    return_meta: bool = False,
 ) -> Callable[[str], str]:
+    """
+    Adaptive RAG (local), simple:
 
-    def predict(question: str) -> str:
-        # Step 1: self assessment
+    - confidence == "high"
+    - confidence != "high"
+
+    return_meta=False: final label
+    return_meta=True:  (final, meta)
+    """
+
+    def predict(question: str):
+        t0 = time.time()
+
+        # ---------- Step 1: self-assessment ----------
+        t_self_start = time.time()
         first_answer, confidence = self_assess_local(llm, question)
+        t_self_ms = (time.time() - t_self_start) * 1000.0
 
-        if confidence == "high":
-            return first_answer
+        used_retrieval = False
+        t_retrieve_ms = 0.0
+        final = first_answer
 
-        # Step 2: retrieve
-        contexts = retriever.retrieve(
-            question,
-            top_k=top_k,
-            include_labels=include_labels,
-            include_meshes=include_meshes,
-        )
-
-        context_block = ""
-        if contexts:
-            joined = "\n\n---\n\n".join(contexts)
-            context_block = (
-                "You are given several PubMed article abstracts.\n"
-                "Answer ONLY using these abstracts.\n"
-                "If insufficient, answer 'maybe'.\n\n"
-                f"Contexts:\n{joined}\n\n"
+        # ---------- Step 2: decision ----------
+        if confidence != "high":
+            # Confidence not high →  RAG
+            used_retrieval = True
+            t_ret_start = time.time()
+            contexts = retriever.retrieve(
+                question,
+                top_k=top_k,
+                include_labels=include_labels,
+                include_meshes=include_meshes,
             )
+            t_retrieve_ms = (time.time() - t_ret_start) * 1000.0
 
-        # Step 3: evidence-grounded final answer
-        prompt = (
-            "You must answer strictly: yes, no, or maybe.\n"
-            "No explanations.\n\n"
-        )
-        prompt += context_block
-        prompt += f"Question: {question}\nAnswer:"
+            if contexts:
+                joined = "\n\n---\n\n".join(contexts)
+                context_block = (
+                    "You are given several PubMed article abstracts.\n"
+                    "Answer ONLY using these abstracts.\n"
+                    "If insufficient, answer 'maybe'.\n\n"
+                    f"Contexts:\n{joined}\n\n"
+                )
 
-        out = llm.generate([prompt], sampling_params)
-        final = (out[0].outputs[0].text or "").strip().lower()
+                prompt = (
+                    "You must answer strictly: yes, no, or maybe.\n"
+                    "No explanations.\n\n"
+                )
+                prompt += context_block
+                prompt += f"Question: {question}\nAnswer:"
 
-        if final not in {"yes", "no", "maybe"}:
-            low = final.lower()
-            if "yes" in low:
-                final = "yes"
-            elif "no" in low:
-                final = "no"
-            elif "maybe" in low:
-                final = "maybe"
+                out = llm.generate([prompt], sampling_params)
+                raw = (out[0].outputs[0].text or "").strip().lower()
+
+                if raw not in {"yes", "no", "maybe"}:
+                    low = raw.lower()
+                    if "yes" in low:
+                        final = "yes"
+                    elif "no" in low:
+                        final = "no"
+                    elif "maybe" in low:
+                        final = "maybe"
+                    else:
+                        final = "maybe"
+                else:
+                    final = raw
             else:
-                final = "maybe"
+                # If cannot retrieve documents → return self-answer
+                final = first_answer
+        else:
+            # confidence == "high" → self-answer
+            final = first_answer
 
-        return final
+        t_total_ms = (time.time() - t0) * 1000.0
+
+        if not return_meta:
+            return final
+
+        meta = {
+            "first_answer": first_answer,
+            "confidence": confidence,
+            "used_retrieval": used_retrieval,
+            "t_self_ms": t_self_ms,
+            "t_retrieve_ms": t_retrieve_ms,
+            "t_total_ms": t_total_ms,
+        }
+        return final, meta
 
     return predict
+
 
 
 def init_azure_openai_client() -> AzureOpenAI:
@@ -311,6 +352,127 @@ def run_baseline_eval(
 
     print(f"[INFO] Baseline metrics saved to {baseline_path}")
     
+def run_adaptive_rag_eval(
+    llm: LLM,
+    sampling_params: SamplingParams,
+    retriever: PubMedQARetriever,
+    subset,
+    n: int,
+    results_dir: str,
+) -> None:
+    """
+    local + adaptive-rag: sweep top_k / labels+MeSH
+    record accuracy / hallucination / decision and latency to csv
+    """
+    topk_values = [1, 2, 3, 4, 5]
+    settings = [
+        ("with_labels_mesh", True, True),
+        ("no_labels_mesh", False, False),
+    ]
+
+    metrics_path = os.path.join(results_dir, "adaptive_sweep_metrics.csv")
+    decisions_path = os.path.join(results_dir, "adaptive_decisions.csv")
+
+    with open(metrics_path, "w") as f_metrics, open(decisions_path, "w") as f_dec:
+        # setting header
+        f_metrics.write(
+            "setting_name,include_labels,include_meshes,top_k,"
+            "accuracy,hallucination,used_retrieval_rate,"
+            "avg_t_self_ms,avg_t_retrieve_ms,avg_t_total_ms\n"
+        )
+        # decision and latency
+        f_dec.write(
+            "setting_name,include_labels,include_meshes,top_k,idx,"
+            "gold,pred,first_answer,confidence,used_retrieval,"
+            "t_self_ms,t_retrieve_ms,t_total_ms\n"
+        )
+
+        labels = ["yes", "no", "maybe"]
+
+        for setting_name, include_labels, include_meshes in settings:
+            print("\n==============================")
+            print(f"[Adaptive] Setting: {setting_name}")
+            print(f"include_labels={include_labels}, include_meshes={include_meshes}")
+            print("==============================")
+
+            for k in topk_values:
+                print(f"\n--- [Adaptive] top_k = {k} ---")
+
+                # adaptive method
+                method = build_adaptive_method_local(
+                    llm,
+                    sampling_params,
+                    retriever=retriever,
+                    top_k=k,
+                    include_labels=include_labels,
+                    include_meshes=include_meshes,
+                    return_meta=True,
+                )
+
+                y_true, y_pred = [], []
+                hallu_flags = []
+                used_retrieval_flags = []
+                t_self_list, t_ret_list, t_total_list = [], [], []
+
+                for i, ex in enumerate(subset, 1):
+                    gold = (ex["final_decision"] or "").strip().lower()
+                    pred, meta = method(ex["question"])
+
+                    y_true.append(gold)
+                    y_pred.append(pred)
+
+                    # hallucination
+                    is_hallu = 0
+                    g, p = gold, pred
+                    if g == "maybe" and p in {"yes", "no"}:
+                        is_hallu = 1
+                    elif g in {"yes", "no"} and p in {"yes", "no"} and g != p:
+                        is_hallu = 1
+                    hallu_flags.append(is_hallu)
+
+                    used_retrieval_flags.append(int(meta["used_retrieval"]))
+                    t_self_list.append(meta["t_self_ms"])
+                    t_ret_list.append(meta["t_retrieve_ms"])
+                    t_total_list.append(meta["t_total_ms"])
+
+                    f_dec.write(
+                        f"{setting_name},{int(include_labels)},{int(include_meshes)},"
+                        f"{k},{i},{gold},{pred},{meta['first_answer']},{meta['confidence']},"
+                        f"{int(meta['used_retrieval'])},"
+                        f"{meta['t_self_ms']:.3f},{meta['t_retrieve_ms']:.3f},{meta['t_total_ms']:.3f}\n"
+                    )
+
+                    print(
+                        f"Q{i}: pred={pred} | gold={gold} | "
+                        f"first={meta['first_answer']} | conf={meta['confidence']} | "
+                        f"used_retr={meta['used_retrieval']}"
+                    )
+
+                y_true_arr = np.array(y_true)
+                y_pred_arr = np.array(y_pred)
+                accuracy = (y_true_arr == y_pred_arr).mean() if y_true else 0.0
+                hallu_rate = np.mean(hallu_flags) if hallu_flags else 0.0
+                used_retrieval_rate = np.mean(used_retrieval_flags) if used_retrieval_flags else 0.0
+
+                avg_t_self = float(np.mean(t_self_list)) if t_self_list else 0.0
+                avg_t_ret = float(np.mean(t_ret_list)) if t_ret_list else 0.0
+                avg_t_total = float(np.mean(t_total_list)) if t_total_list else 0.0
+
+                print(f"[Adaptive] Accuracy on first {n}: {accuracy:.4f}")
+                print(f"[Adaptive] Hallucination rate: {hallu_rate:.4f}")
+                print(f"[Adaptive] Used retrieval on {used_retrieval_rate*100:.1f}% questions")
+                print(f"[Adaptive] avg_t_self={avg_t_self:.1f}ms, "
+                      f"avg_t_retrieve={avg_t_ret:.1f}ms, avg_t_total={avg_t_total:.1f}ms")
+
+                f_metrics.write(
+                    f"{setting_name},{int(include_labels)},{int(include_meshes)},"
+                    f"{k},{accuracy:.6f},{hallu_rate:.6f},{used_retrieval_rate:.6f},"
+                    f"{avg_t_self:.3f},{avg_t_ret:.3f},{avg_t_total:.3f}\n"
+                )
+
+    print(f"[INFO] Adaptive sweep metrics saved to {metrics_path}")
+    print(f"[INFO] Adaptive decision logs saved to {decisions_path}")
+    
 def self_assess_local(llm: LLM, question: str) -> tuple[str, str]:
     """
     return: (answer, confidence)
@@ -320,7 +482,7 @@ def self_assess_local(llm: LLM, question: str) -> tuple[str, str]:
     sampling_params = SamplingParams(
         temperature=0.0,
         top_p=1.0,
-        max_tokens=64,
+        max_tokens=128,
     )
     prompt = f"""
         You are a medical QA assistant answering PubMed-style clinical questions.
@@ -480,16 +642,8 @@ if __name__ == "__main__":
         elif args.model == "adaptive-rag":
         # adaptive rag
             if retriever is None:
-                raise RuntimeError("adaptive model requires a retriever.")
-            method = build_adaptive_method_local(
-                llm,
-                sampling_params,
-                retriever=retriever,
-                top_k=args.rag_top_k,
-                include_labels=True,
-                include_meshes=True,
-            )
-            run_baseline_eval(method, subset, n, args, RESULTS_DIR)
+                raise RuntimeError("adaptive-rag model requires a retriever.")
+            run_adaptive_rag_eval(llm, sampling_params, retriever, subset, n, RESULTS_DIR)
             
         else:
             # local + no-rag baseline
