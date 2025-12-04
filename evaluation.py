@@ -65,6 +65,82 @@ def build_llm_method_local(
         return output[0].outputs[0].text.strip().lower()
     return predict
 
+
+def build_rag_method_local_with_meta(
+    llm: LLM,
+    sampling_params: SamplingParams,
+    retriever: PubMedQARetriever,
+    top_k: int,
+    include_labels: bool,
+    include_meshes: bool,
+) -> Callable[[str], Tuple[str, dict]]:
+    """
+    RAG-always with latency and meta。
+    return (final_answer, meta)
+    meta:
+        used_retrieval = 1
+        t_retrieve_ms
+        t_llm_ms
+        t_total_ms
+    """
+    def predict(question: str):
+        t0 = time.time()
+
+        # Step 1: retrieve
+        t_ret_start = time.time()
+        contexts = retriever.retrieve(
+            question,
+            top_k=top_k,
+            include_labels=include_labels,
+            include_meshes=include_meshes,
+        )
+        t_retrieve_ms = (time.time() - t_ret_start) * 1000.0
+
+        # Build prompt
+        context_block = ""
+        if contexts:
+            joined = "\n\n---\n\n".join(contexts)
+            context_block = (
+                "You are given several PubMed article abstracts.\n"
+                "Answer ONLY using these abstracts.\n"
+                "If insufficient, answer 'maybe'.\n\n"
+                f"Contexts:\n{joined}\n\n"
+            )
+
+        prompt = (
+            "You must answer strictly with one label: yes, no, or maybe.\n"
+            "No explanations. Only output the label.\n\n"
+        )
+        prompt += context_block
+        prompt += f"Question: {question}\nAnswer:"
+
+        # Step 2: LLM
+        t_llm_start = time.time()
+        out = llm.generate([prompt], sampling_params)
+        t_llm_ms = (time.time() - t_llm_start) * 1000.0
+
+        raw = (out[0].outputs[0].text or "").strip().lower()
+        if raw not in {"yes","no","maybe"}:
+            low = raw.lower()
+            if "yes" in low: raw="yes"
+            elif "no" in low: raw="no"
+            elif "maybe" in low:raw="maybe"
+            else: raw="maybe"
+
+        t_total_ms = (time.time() - t0) * 1000.0
+
+        meta = {
+            "used_retrieval": True,
+            "t_retrieve_ms": t_retrieve_ms,
+            "t_llm_ms": t_llm_ms,
+            "t_total_ms": t_total_ms,
+        }
+
+        return raw, meta
+
+    return predict
+
+
 def build_adaptive_method_local(
     llm: LLM,
     sampling_params: SamplingParams,
@@ -216,6 +292,32 @@ def run_eval(method: Callable[[str], str], data: Iterable[dict]) -> Tuple[List[s
         print(f"Q{i}: predict={pred} | gold={gold}")
     return y_true, y_pred
 
+def run_eval_with_latency(
+    method: Callable[[str], Tuple[str, dict]],
+    data: Iterable[dict],
+) -> Tuple[List[str], List[str], List[dict]]:
+    """
+    Eval for methods that return (pred, meta).
+    """
+    y_true, y_pred, meta_list = [], [], []
+
+    for i, ex in enumerate(data, 1):
+        gold = (ex["final_decision"] or "").strip().lower()
+        pred, meta = method(ex["question"])
+
+        pred = (pred or "").strip().lower()
+        y_true.append(gold)
+        y_pred.append(pred)
+        meta_list.append(meta)
+
+        print(
+            f"Q{i}: predict={pred} | gold={gold} | "
+            f"meta={meta}"
+        )
+
+    return y_true, y_pred, meta_list
+
+
 def hallucination_rate(y_true: List[str], y_pred: List[str]) -> float:
     """
     Overclaim: truth==maybe AND pred in {yes,no}
@@ -256,8 +358,11 @@ def run_rag_eval(
     with open(sweep_path, "w") as f_metrics, open(conf_path, "w") as f_conf:
         # CSV header: metrics
         f_metrics.write(
-            "setting_name,include_labels,include_meshes,top_k,accuracy,hallucination\n"
+            "setting_name,include_labels,include_meshes,top_k,"
+            "accuracy,hallucination,"
+            "avg_t_retrieve_ms,avg_t_llm_ms,avg_t_total_ms\n"
         )
+
         
         # CSV header: confusion matrix (flattened 3x3)
         f_conf.write(
@@ -276,7 +381,7 @@ def run_rag_eval(
             for k in topk_values:
                 print(f"\n--- top_k = {k} ---")
 
-                method_for_config = build_llm_method_local(
+                method_for_config = build_rag_method_local_with_meta(
                     llm,
                     sampling_params,
                     retriever=retriever,
@@ -285,18 +390,29 @@ def run_rag_eval(
                     include_meshes=include_meshes,
                 )
 
-                y_true, y_pred = run_eval(method_for_config, subset)
-                accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
+                y_true, y_pred, meta_list = run_eval_with_latency(method_for_config, subset)
+                # accuracy / hallucination
+                y_true_arr = np.array(y_true)
+                y_pred_arr = np.array(y_pred)
+                accuracy = (y_true_arr == y_pred_arr).mean() if y_true else 0.0
                 hallu = hallucination_rate(y_true, y_pred)
-
-                # Write to CSV
-                f_metrics.write(
-                    f"{setting_name},{int(include_labels)},{int(include_meshes)},"
-                    f"{k},{accuracy:.6f},{hallu:.6f}\n"
-                )
+                
+                # latency
+                avg_t_retrieve = float(np.mean([m["t_retrieve_ms"] for m in meta_list])) if meta_list else 0.0
+                avg_t_llm      = float(np.mean([m["t_llm_ms"] for m in meta_list])) if meta_list else 0.0
+                avg_t_total    = float(np.mean([m["t_total_ms"] for m in meta_list])) if meta_list else 0.0
 
                 print(f"Accuracy on first {n}: {accuracy:.4f}")
                 print(f"Hallucination rate on first {n}: {hallu:.4f}")
+                print(f"[RAG-always] avg_t_retrieve={avg_t_retrieve:.1f}ms, "
+                      f"avg_t_llm={avg_t_llm:.1f}ms, avg_t_total={avg_t_total:.1f}ms")
+                
+                # Write to CSV
+                f_metrics.write(
+                    f"{setting_name},{int(include_labels)},{int(include_meshes)},"
+                    f"{k},{accuracy:.6f},{hallu:.6f},"
+                    f"{avg_t_retrieve:.3f},{avg_t_llm:.3f},{avg_t_total:.3f}\n"
+                )
 
                 # Caluculate and write confusion matrix（3x3）
                 cm = confusion_matrix(y_true, y_pred, labels=labels)
@@ -409,21 +525,18 @@ def run_adaptive_rag_eval(
                     return_meta=True,
                 )
 
-                y_true, y_pred = [], []
+                y_true, y_pred, meta_list = run_eval_with_latency(method, subset)
+
+                # hallucination flags
                 hallu_flags = []
                 used_retrieval_flags = []
                 t_self_list, t_ret_list, t_total_list = [], [], []
 
-                for i, ex in enumerate(subset, 1):
-                    gold = (ex["final_decision"] or "").strip().lower()
-                    pred, meta = method(ex["question"])
-
-                    y_true.append(gold)
-                    y_pred.append(pred)
-
+                for i, (gold, pred, meta) in enumerate(zip(y_true, y_pred, meta_list), 1):
+                    g, p = gold, pred
+                    
                     # hallucination
                     is_hallu = 0
-                    g, p = gold, pred
                     if g == "maybe" and p in {"yes", "no"}:
                         is_hallu = 1
                     elif g in {"yes", "no"} and p in {"yes", "no"} and g != p:
