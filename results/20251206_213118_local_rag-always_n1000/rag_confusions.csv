@@ -1,0 +1,11 @@
+setting_name,include_labels,include_meshes,top_k,cm_yy,cm_yn,cm_ym,cm_ny,cm_nn,cm_nm,cm_my,cm_mn,cm_mm
+with_labels_mesh,1,1,1,78,51,423,46,41,251,21,6,83
+with_labels_mesh,1,1,2,98,33,421,50,25,263,19,4,87
+with_labels_mesh,1,1,3,123,32,397,49,33,256,26,3,81
+with_labels_mesh,1,1,4,154,47,351,68,34,236,24,5,81
+with_labels_mesh,1,1,5,165,23,364,66,26,246,28,3,79
+no_labels_mesh,0,0,1,92,46,414,51,43,244,22,8,80
+no_labels_mesh,0,0,2,114,27,411,53,28,257,24,3,83
+no_labels_mesh,0,0,3,141,24,387,58,31,249,30,4,76
+no_labels_mesh,0,0,4,153,44,355,71,39,228,25,6,79
+no_labels_mesh,0,0,5,171,35,346,75,39,224,30,2,78

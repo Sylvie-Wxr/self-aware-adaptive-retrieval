@@ -1,0 +1,5 @@
+model=adaptive-rag
+llm=local
+n=1000
+accuracy=0.307000
+hallucination=0.196000

@@ -1,0 +1,11 @@
+setting_name,include_labels,include_meshes,top_k,accuracy,hallucination,avg_t_retrieve_ms,avg_t_llm_ms,avg_t_total_ms
+with_labels_mesh,1,1,1,0.202000,0.124000,92.022,17.295,109.327
+with_labels_mesh,1,1,2,0.210000,0.106000,91.917,19.467,111.396
+with_labels_mesh,1,1,3,0.237000,0.110000,91.685,37.288,128.987
+with_labels_mesh,1,1,4,0.269000,0.144000,91.728,47.944,139.687
+with_labels_mesh,1,1,5,0.270000,0.120000,91.105,59.405,150.526
+no_labels_mesh,0,0,1,0.215000,0.127000,91.718,14.954,106.684
+no_labels_mesh,0,0,2,0.225000,0.107000,91.778,16.207,107.998
+no_labels_mesh,0,0,3,0.248000,0.116000,91.742,26.613,118.368
+no_labels_mesh,0,0,4,0.271000,0.146000,91.048,39.823,130.886
+no_labels_mesh,0,0,5,0.288000,0.142000,87.275,49.028,136.319
