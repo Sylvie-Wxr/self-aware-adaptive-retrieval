@@ -118,8 +118,8 @@ def build_rag_method_local_with_meta(
             joined = "\n\n---\n\n".join(contexts)
             context_block = (
                 "You are given several PubMed article abstracts.\n"
-                "Answer ONLY using these abstracts.\n"
-                "If insufficient, answer 'maybe'.\n\n"
+                "Answer the question ONLY based on these abstracts.\n"
+                "If the information is insufficient, answer 'maybe'.\n\n"
                 f"Contexts:\n{joined}\n\n"
             )
 
@@ -200,8 +200,8 @@ def build_adaptive_method_local(
                 joined = "\n\n---\n\n".join(contexts)
                 context_block = (
                     "You are given several PubMed article abstracts.\n"
-                    "Answer ONLY using these abstracts.\n"
-                    "If insufficient, answer 'maybe'.\n\n"
+                    "Answer the question ONLY based on these abstracts.\n"
+                    "If the information is insufficient, answer 'maybe'.\n\n"
                     f"Contexts:\n{joined}\n\n"
                 )
 
