@@ -124,6 +124,42 @@ def main():
 
     print(f"[INFO] Saved {all_curves_path}")
     
+    # ====== Latency vs top_k ======
+    # Compare with_labels_mesh vs no_labels_mesh
+    if not df_cmp.empty and df_cmp["setting_name"].nunique() == 2:
+        fig3, axes = plt.subplots(3, 1, figsize=(7, 9), sharex=True)
+
+        latency_cols = [
+            ("avg_t_retrieve_ms", "Retrieve latency (ms)"),
+            ("avg_t_llm_ms", "LLM latency (ms)"),
+            ("avg_t_total_ms", "End-to-end latency (ms)"),
+        ]
+
+        for ax, (col, ylabel) in zip(axes, latency_cols):
+            for setting_name, group in df_cmp.groupby("setting_name"):
+                group = group.sort_values("top_k")
+                ax.plot(
+                    group["top_k"],
+                    group[col],
+                    marker="o",
+                    label=setting_name,
+                )
+            ax.set_ylabel(ylabel)
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+        axes[-1].set_xlabel("top_k")
+        axes[0].set_title("Latency vs top_k (with vs without labels+MeSH)")
+        axes[-1].set_xticks(sorted(df_cmp["top_k"].unique()))
+        axes[0].legend()
+
+        latency_path = os.path.join(out_dir, "latency_vs_topk.png")
+        plt.tight_layout()
+        plt.savefig(latency_path)
+        plt.close()
+        print(f"[INFO] Saved {latency_path}")
+    else:
+        print("[WARN] Latency figure not created: missing settings.")
+    
     # ====== Confusion metrics based on best config ======
     if args.conf_csv is not None:
         conf_path = args.conf_csv

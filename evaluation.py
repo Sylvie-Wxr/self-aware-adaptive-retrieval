@@ -61,9 +61,25 @@ def build_llm_method_local(
 
         prompt += f"Question: {question}\nAnswer:"
 
-        output = llm.generate([prompt], sampling_params)
-        return output[0].outputs[0].text.strip().lower()
+        out = llm.generate([prompt], sampling_params)
+        raw = out[0].outputs[0].text or ""
+        return normalize_label(raw)
     return predict
+
+def normalize_label(raw: str) -> str:
+    """
+    Normalize model output to one of {"yes", "no", "maybe"}.
+    Any other output → "maybe".
+    """
+    if not raw:
+        return "maybe"
+
+    lab = raw.strip().lower()
+    lab = lab.strip(" .,;:\n\t") 
+
+    if lab in {"yes", "no", "maybe"}:
+        return lab
+    return "maybe"
 
 
 def build_rag_method_local_with_meta(
@@ -119,13 +135,8 @@ def build_rag_method_local_with_meta(
         out = llm.generate([prompt], sampling_params)
         t_llm_ms = (time.time() - t_llm_start) * 1000.0
 
-        raw = (out[0].outputs[0].text or "").strip().lower()
-        if raw not in {"yes","no","maybe"}:
-            low = raw.lower()
-            if "yes" in low: raw="yes"
-            elif "no" in low: raw="no"
-            elif "maybe" in low:raw="maybe"
-            else: raw="maybe"
+        raw = out[0].outputs[0].text or ""
+        final_answer = normalize_label(raw)
 
         t_total_ms = (time.time() - t0) * 1000.0
 
@@ -136,7 +147,7 @@ def build_rag_method_local_with_meta(
             "t_total_ms": t_total_ms,
         }
 
-        return raw, meta
+        return final_answer, meta
 
     return predict
 
@@ -202,26 +213,11 @@ def build_adaptive_method_local(
                 prompt += f"Question: {question}\nAnswer:"
 
                 out = llm.generate([prompt], sampling_params)
-                raw = (out[0].outputs[0].text or "").strip().lower()
-
-                if raw not in {"yes", "no", "maybe"}:
-                    low = raw.lower()
-                    if "yes" in low:
-                        final = "yes"
-                    elif "no" in low:
-                        final = "no"
-                    elif "maybe" in low:
-                        final = "maybe"
-                    else:
-                        final = "maybe"
-                else:
-                    final = raw
+                raw = out[0].outputs[0].text or ""
+                final = normalize_label(raw)
             else:
                 # If cannot retrieve documents → return self-answer
                 final = first_answer
-        else:
-            # confidence == "high" → self-answer
-            final = first_answer
 
         t_total_ms = (time.time() - t0) * 1000.0
 
@@ -617,7 +613,8 @@ def self_assess_local(llm: LLM, question: str) -> tuple[str, str]:
         end = text.rindex("}") + 1
         json_str = text[start:end]
         obj = json.loads(json_str)
-        ans = (obj.get("answer") or "").strip().lower()
+        ans_raw = obj.get("answer") or ""
+        ans = normalize_label(ans_raw) 
         conf = (obj.get("confidence") or "").strip().lower()
     except Exception:
         ans = "maybe"
