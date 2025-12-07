@@ -160,7 +160,7 @@ def main():
     else:
         print("[WARN] Latency figure not created: missing settings.")
     
-    # ====== Confusion metrics based on best config ======
+    # ====== Confusion metrics based on 2 best configs ======
     if args.conf_csv is not None:
         conf_path = args.conf_csv
         if not os.path.exists(conf_path):
@@ -168,40 +168,38 @@ def main():
         else:
             df_conf = pd.read_csv(conf_path)
 
-            # Best config: smallest hallucination
-            # If equal, based on biggest accuracy
-            df_best = df.sort_values(
+            # 1) Best hallucination config (safest)
+            df_best_hallu = df.sort_values(
                 by=["hallucination", "accuracy"],
                 ascending=[True, False],
             )
-            best = df_best.iloc[0]
+            best_h = df_best_hallu.iloc[0]
 
-            best_setting = best["setting_name"]
-            best_k = int(best["top_k"])
-            best_inc_labels = int(best["include_labels"])
-            best_inc_meshes = int(best["include_meshes"])
-
-            print("\n[INFO] Best config selected from CSV:")
-            print(
-                f"  setting={best_setting}, top_k={best_k}, "
-                f"include_labels={best_inc_labels}, include_meshes={best_inc_meshes}"
+            # 2) Best accuracy config (most effective)
+            df_best_acc = df.sort_values(
+                by=["accuracy", "hallucination"],
+                ascending=[False, True],
             )
-            print(
-                f"  accuracy={best['accuracy']:.4f}, hallucination={best['hallucination']:.4f}"
-            )
+            best_a = df_best_acc.iloc[0]
 
-            row = df_conf[
-                (df_conf["setting_name"] == best_setting)
-                & (df_conf["top_k"] == best_k)
-                & (df_conf["include_labels"] == best_inc_labels)
-                & (df_conf["include_meshes"] == best_inc_meshes)
-            ]
+            def plot_confusion(best, name):
+                setting = best["setting_name"]
+                k = int(best["top_k"])
+                inc_labels = int(best["include_labels"])
+                inc_meshes = int(best["include_meshes"])
 
-            if row.empty:
-                print("[WARN] No matching row found in conf-csv for best config.")
-            else:
+                row = df_conf[
+                    (df_conf["setting_name"] == setting)
+                    & (df_conf["top_k"] == k)
+                    & (df_conf["include_labels"] == inc_labels)
+                    & (df_conf["include_meshes"] == inc_meshes)
+                ]
+
+                if row.empty:
+                    print(f"[WARN] No matching row for {name}")
+                    return
+
                 row = row.iloc[0]
-                # Order: [yy, yn, ym, ny, nn, nm, my, mn, mm]
                 cm_vals = [
                     row["cm_yy"], row["cm_yn"], row["cm_ym"],
                     row["cm_ny"], row["cm_nn"], row["cm_nm"],
@@ -214,18 +212,18 @@ def main():
                 plt.figure()
                 disp.plot(values_format="d", cmap=plt.cm.Blues)
                 plt.title(
-                    f"Confusion Matrix (best RAG config)\n"
-                    f"{best_setting}, top_k={best_k}, "
-                    f"acc={best['accuracy']:.3f}, hallu={best['hallucination']:.3f}"
+                    f"RAG Confusion Matrix ({name})\n"
+                    f"{setting}, top_k={k}, acc={best['accuracy']:.3f}, hallu={best['hallucination']:.3f}"
                 )
                 plt.tight_layout()
-
-                cm_out_path = os.path.join(out_dir, "confusion_matrix_best_rag.png")
-                plt.savefig(cm_out_path)
+                out_path = os.path.join(out_dir, f"rag_confusion_{name}.png")
+                plt.savefig(out_path)
                 plt.close()
-                print(f"[INFO] Saved {cm_out_path}")
-    else:
-        print("[INFO] --conf-csv not provided; skip confusion matrix plotting.")
+                print(f"[INFO] Saved {out_path}")
+
+            # Plot both confusion matrices
+            plot_confusion(best_h, "best_hallucination")
+            plot_confusion(best_a, "best_accuracy")
 
 if __name__ == "__main__":
     main()

@@ -3,6 +3,8 @@ import argparse
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 
 
 def main():
@@ -14,6 +16,12 @@ def main():
         type=str,
         required=True,
         help="Path to adaptive_metrics.csv",
+    )
+    parser.add_argument(
+        "--decisions-csv",
+        type=str,
+        default=None,
+        help="Path to adaptive_decisions.csv (for confusion matrices).",
     )
     parser.add_argument(
         "--out-dir",
@@ -32,10 +40,10 @@ def main():
         out_dir = args.out_dir
     os.makedirs(out_dir, exist_ok=True)
 
-    # 排序，保证 top_k 顺序正确
+    # sort for topk
     df = df.sort_values(["setting_name", "top_k"])
 
-    # 只保留两个我们关心的 setting
+    # Compare with_labels_mesh vs no_labels_mesh 
     compare_settings = ["with_labels_mesh", "no_labels_mesh"]
     df_cmp = df[df["setting_name"].isin(compare_settings)].copy()
 
@@ -142,6 +150,75 @@ def main():
         print(f"[INFO] Saved {latency_path}")
     else:
         print("[WARN] Some latency columns are missing; skip latency figure.")
+
+    # ====== 4) Confusion matrices for best configs ======
+    if args.decisions_csv is not None and os.path.exists(args.decisions_csv):
+        df_dec = pd.read_csv(args.decisions_csv)
+
+        # 4.1 Choose 2 best configs
+        # a) hallucination lowest（choose higher accuracy when tie）
+        df_best_hallu = df.sort_values(
+            by=["hallucination", "accuracy"],
+            ascending=[True, False],
+        )
+        best_h = df_best_hallu.iloc[0]
+
+        # b) accuracy highest（choose lower hallucination when tie）
+        df_best_acc = df.sort_values(
+            by=["accuracy", "hallucination"],
+            ascending=[False, True],
+        )
+        best_a = df_best_acc.iloc[0]
+
+        def plot_conf(best_row, tag: str):
+            setting = best_row["setting_name"]
+            k = int(best_row["top_k"])
+            inc_labels = int(best_row["include_labels"])
+            inc_meshes = int(best_row["include_meshes"])
+
+            sub = df_dec[
+                (df_dec["setting_name"] == setting)
+                & (df_dec["top_k"] == k)
+                & (df_dec["include_labels"] == inc_labels)
+                & (df_dec["include_meshes"] == inc_meshes)
+            ].copy()
+
+            if sub.empty:
+                print(f"[WARN] No matching rows in decisions CSV for {tag}")
+                return
+
+            # gold / pred are already normalized yes/no/maybe
+            y_true = sub["gold"].astype(str).str.strip().str.lower().tolist()
+            y_pred = sub["pred"].astype(str).str.strip().str.lower().tolist()
+
+            labels = ["yes", "no", "maybe"]
+            cm = confusion_matrix(y_true, y_pred, labels=labels)
+
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+            plt.figure()
+            disp.plot(values_format="d", cmap=plt.cm.Blues)
+            plt.title(
+                f"Adaptive RAG Confusion Matrix ({tag})\n"
+                f"{setting}, top_k={k}, "
+                f"acc={best_row['accuracy']:.3f}, hallu={best_row['hallucination']:.3f}"
+            )
+            plt.tight_layout()
+            out_path = os.path.join(out_dir, f"adaptive_confusion_{tag}.png")
+            plt.savefig(out_path)
+            plt.close()
+            print(f"[INFO] Saved {out_path}")
+
+        # 2 confusion matrix plots
+        print("\n[INFO] Best (lowest hallucination) adaptive config:")
+        print(best_h)
+        plot_conf(best_h, "best_hallucination")
+
+        print("\n[INFO] Best (highest accuracy) adaptive config:")
+        print(best_a)
+        plot_conf(best_a, "best_accuracy")
+
+    else:
+        print("[INFO] decisions CSV not provided or not found; skip confusion matrices.")
 
 
 if __name__ == "__main__":
