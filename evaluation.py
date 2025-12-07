@@ -596,7 +596,7 @@ def self_assess_local(llm: LLM, question: str) -> tuple[str, str]:
     prompt = f"""You are a medical QA assistant answering PubMed-style clinical questions.
 
 Task:
-1. Answer the clinical question with "yes", "no", or "maybe".
+1. Answer the clinical question with exactly "yes", "no", or "maybe".
 2. Rate your confidence as "high", "medium", or "low".
 
 IMPORTANT - Rate confidence as "low" if:
@@ -604,6 +604,10 @@ IMPORTANT - Rate confidence as "low" if:
 - The question requires specialized clinical knowledge beyond general medical understanding
 - Multiple valid interpretations exist
 - You would need to consult literature to be certain
+
+Rate "MEDIUM" if:
+- You have reasonable confidence but some uncertainty remains
+- The evidence is generally supportive but not definitive
 
 Rate confidence as "high" ONLY if:
 - You are very confident based on well-established medical knowledge
@@ -745,7 +749,7 @@ if __name__ == "__main__":
             sampling_params = SamplingParams(
             temperature=0.0,
             top_p=1.0,
-            max_tokens=1,
+            max_tokens=5,
             stop=["\n", ".", ","],
         )
 
