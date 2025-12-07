@@ -605,10 +605,6 @@ IMPORTANT - Rate confidence as "low" if:
 - Multiple valid interpretations exist
 - You would need to consult literature to be certain
 
-Rate "MEDIUM" if:
-- You have reasonable confidence but some uncertainty remains
-- The evidence is generally supportive but not definitive
-
 Rate confidence as "high" ONLY if:
 - You are very confident based on well-established medical knowledge
 - The answer is unambiguous and widely accepted
