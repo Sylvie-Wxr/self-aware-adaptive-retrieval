@@ -6,5 +6,5 @@
   "retriever_model": "BAAI/bge-large-en-v1.5",
   "rag_top_k": 3,
   "results_dir": "/home/wu.xinrui/ondemand/dev/self-aware-adaptive-retrieval/results",
-  "run_name": "20251206_213118_local_rag-always_n1000"
+  "run_name": "20251207_025403_local_rag-always_n1000"
 }

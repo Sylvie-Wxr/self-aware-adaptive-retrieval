@@ -1,3 +1,0 @@
-2025-12-06 21:31:18,300 [INFO] Starting evaluation with args: Namespace(model='rag-always', llm='local', n=1000, deployment='gpt-5-nano', index_dir='/projects/insightx-lab/xinruiwu/pubmedqa_index_full_bge', retriever_model='BAAI/bge-large-en-v1.5', rag_top_k=3, results_dir='/home/wu.xinrui/ondemand/dev/self-aware-adaptive-retrieval/results', run_name='20251206_213118_local_rag-always_n1000')
-2025-12-06 21:31:21,007 [INFO] Use pytorch device_name: cuda:0
-2025-12-06 21:31:21,007 [INFO] Load pretrained SentenceTransformer: BAAI/bge-large-en-v1.5
