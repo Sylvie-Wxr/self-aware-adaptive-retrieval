@@ -593,17 +593,27 @@ def self_assess_local(llm: LLM, question: str) -> tuple[str, str]:
         top_p=1.0,
         max_tokens=128,
     )
-    prompt = f"""
-        You are a medical QA assistant answering PubMed-style clinical questions.
+    prompt = f"""You are a medical QA assistant answering PubMed-style clinical questions.
 
-        1. First, answer the question with exactly one of: "yes", "no", or "maybe".
-        2. Then, rate your confidence in that answer as one of: "high", "medium", "low".
+Task:
+1. Answer the clinical question with "yes", "no", or "maybe".
+2. Rate your confidence as "high", "medium", or "low".
 
-        Return your result strictly as a JSON object, for example:
-        {{"answer": "yes", "confidence": "medium"}}
+IMPORTANT - Rate confidence as "low" if:
+- You are uncertain about specific medical facts or mechanisms
+- The question requires specialized clinical knowledge beyond general medical understanding
+- Multiple valid interpretations exist
+- You would need to consult literature to be certain
 
-        Question: {question}
-    """
+Rate confidence as "high" ONLY if:
+- You are very confident based on well-established medical knowledge
+- The answer is unambiguous and widely accepted
+
+Return ONLY a JSON object:
+{{"answer": "yes", "confidence": "medium"}}
+
+Question: {question}
+"""
     out = llm.generate([prompt], sampling_params)
     text = out[0].outputs[0].text.strip()
 
