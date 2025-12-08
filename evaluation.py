@@ -431,12 +431,18 @@ def run_baseline_eval(
     results_dir: str,  
 ) -> None:
     """no-rag local or API baseline: Run once + confusion matrix + metrics file。"""
+    # Add latency timing
+    t0 = time.time()
     y_true, y_pred = run_eval(method, subset)
+    t_total_ms = (time.time() - t0) * 1000.0
+    avg_t_total_ms = t_total_ms / len(y_true) if y_true else 0.0
+    
     accuracy = (np.array(y_true) == np.array(y_pred)).mean() if y_true else 0.0
     hallu = hallucination_rate(y_true, y_pred)
 
     print(f"\nAccuracy on first {n}: {accuracy:.4f}")
     print(f"Hallucination rate on first {n}: {hallu:.4f}")
+    print(f"[Baseline] avg_t_total={avg_t_total_ms:.1f}ms")
 
     # Confusion matrix
     labels = ["yes", "no", "maybe"]
@@ -461,6 +467,8 @@ def run_baseline_eval(
         f.write(f"n={n}\n")
         f.write(f"accuracy={accuracy:.6f}\n")
         f.write(f"hallucination={hallu:.6f}\n")
+        # Add latency
+        f.write(f"avg_t_total_ms={avg_t_total_ms:.3f}\n")
 
     print(f"[INFO] Baseline metrics saved to {baseline_path}")
     
