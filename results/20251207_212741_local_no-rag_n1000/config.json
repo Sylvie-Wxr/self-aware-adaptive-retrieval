@@ -1,0 +1,10 @@
+{
+  "model": "no-rag",
+  "llm": "local",
+  "n": 1000,
+  "index_dir": "/projects/insightx-lab/xinruiwu/pubmedqa_index_full_bge",
+  "retriever_model": "BAAI/bge-large-en-v1.5",
+  "rag_top_k": 3,
+  "results_dir": "/home/wu.xinrui/ondemand/dev/self-aware-adaptive-retrieval/results",
+  "run_name": "20251207_212741_local_no-rag_n1000"
+}
