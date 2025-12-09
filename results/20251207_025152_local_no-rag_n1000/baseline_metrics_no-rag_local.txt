@@ -1,5 +1,0 @@
-model=no-rag
-llm=local
-n=1000
-accuracy=0.272000
-hallucination=0.142000
